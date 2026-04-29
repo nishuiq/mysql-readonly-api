@@ -11,6 +11,7 @@ if SQL_GUARD_SPEC is None or SQL_GUARD_SPEC.loader is None:
 sql_guard = importlib.util.module_from_spec(SQL_GUARD_SPEC)
 SQL_GUARD_SPEC.loader.exec_module(sql_guard)
 clean_sql = sql_guard.clean_sql
+explain_sql = sql_guard.explain_sql
 
 
 class SqlGuardTest(unittest.TestCase):
@@ -23,6 +24,9 @@ class SqlGuardTest(unittest.TestCase):
 
     def test_allows_single_trailing_semicolon(self) -> None:
         self.assertEqual(clean_sql("select 1;"), "select 1")
+
+    def test_explain_wraps_clean_sql(self) -> None:
+        self.assertEqual(explain_sql(clean_sql("select 1;")), "EXPLAIN select 1")
 
     def test_rejects_multiple_statements(self) -> None:
         self.assert_rejected("select 1; select 2")
@@ -63,10 +67,15 @@ class SqlGuardTest(unittest.TestCase):
             with self.subTest(sql=sql):
                 self.assert_rejected(sql)
 
-    def test_rejects_mysql_special_comments(self) -> None:
+    def test_rejects_block_comments(self) -> None:
         for sql in [
+            "select /* comment */ 1",
             "select /*!50000 sleep(1) */ 1",
             "select /*+ MAX_EXECUTION_TIME(1) */ 1",
+            "-- comment\nselect 1",
+            "select 1 -- comment",
+            "# comment\nselect 1",
+            "select 1 # comment",
         ]:
             with self.subTest(sql=sql):
                 self.assert_rejected(sql)

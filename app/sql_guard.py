@@ -5,8 +5,7 @@ from fastapi import HTTPException
 
 ALLOWED_FIRST_WORDS = {"select", "with"}
 FORBIDDEN_PATTERNS = (
-    re.compile(r"/\*!", re.IGNORECASE),
-    re.compile(r"/\*\+", re.IGNORECASE),
+    re.compile(r"/\*|--|#", re.IGNORECASE),
     re.compile(
         r"\b("
         r"insert|update|delete|replace|drop|alter|create|truncate|rename|"
@@ -59,26 +58,8 @@ def has_forbidden_pattern(sql: str) -> bool:
 
 
 def first_word(sql: str) -> str:
-    """跳过开头注释后读取 SQL 首个关键字。"""
-    remaining = sql.lstrip()
-    while True:
-        if remaining.startswith("--"):
-            _, _, remaining = remaining.partition("\n")
-            remaining = remaining.lstrip()
-            continue
-        if remaining.startswith("#"):
-            _, _, remaining = remaining.partition("\n")
-            remaining = remaining.lstrip()
-            continue
-        if remaining.startswith("/*"):
-            end = remaining.find("*/")
-            if end == -1:
-                return ""
-            remaining = remaining[end + 2 :].lstrip()
-            continue
-        break
-
-    match = re.match(r"([a-zA-Z]+)", remaining)
+    """读取 SQL 首个关键字。"""
+    match = re.match(r"([a-zA-Z]+)", sql.lstrip())
     return match.group(1).lower() if match else ""
 
 
@@ -99,3 +80,8 @@ def paged_sql(sql: str, limit: int, offset: int) -> tuple[str, dict[str, Any]]:
 def count_sql(sql: str) -> str:
     """将查询包成 count SQL。"""
     return f"SELECT COUNT(*) AS count FROM ({sql}) AS _count_query"
+
+
+def explain_sql(sql: str) -> str:
+    """生成 EXPLAIN SQL。"""
+    return f"EXPLAIN {sql}"

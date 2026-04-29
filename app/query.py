@@ -1,6 +1,6 @@
 from app.database import db_session
 from app.executor import run_sql
-from app.sql_guard import clean_sql, count_sql, paged_sql
+from app.sql_guard import clean_sql, count_sql, explain_sql, paged_sql
 
 
 def query_text(sql: str, limit: int, offset: int) -> str:
@@ -16,3 +16,10 @@ def count_text(sql: str) -> str:
     readonly_sql = clean_sql(sql)
     with db_session() as session:
         return run_sql(session, count_sql(readonly_sql))
+
+
+def explain_text(sql: str) -> str:
+    """查看 SELECT/WITH 查询执行计划。"""
+    readonly_sql = clean_sql(sql)
+    with db_session() as session:
+        return run_sql(session, explain_sql(readonly_sql))

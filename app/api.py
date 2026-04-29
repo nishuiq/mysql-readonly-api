@@ -3,7 +3,7 @@ from fastapi import APIRouter, Query, Request, Response
 from app.config import settings
 from app.ddl import table_ddl_text
 from app.metadata import list_schemas, list_tables
-from app.query import count_text, query_text
+from app.query import count_text, explain_text, query_text
 from app.text_format import text_response
 
 router = APIRouter()
@@ -55,3 +55,10 @@ async def count(request: Request) -> Response:
     """统计 SELECT/WITH 查询结果数量。"""
     sql = await request.body()
     return text_response(count_text(sql=sql.decode("utf-8")))
+
+
+@router.post("/explain", response_class=Response)
+async def explain(request: Request) -> Response:
+    """查看 SELECT/WITH 查询执行计划。"""
+    sql = await request.body()
+    return text_response(explain_text(sql=sql.decode("utf-8")))

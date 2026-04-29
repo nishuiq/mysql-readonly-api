@@ -83,6 +83,7 @@ query:
 | `/ddl` | `GET` | 查看一个或多个表的 IDEA 风格 DDL，包含字段、主键、唯一约束、普通索引 | `schema` 必填，`table` 必填；多个表可重复传 `table` 或用逗号分隔 | 无 | DDL 纯文本 |
 | `/query` | `POST` | 执行 `SELECT/WITH` SQL，表名需要显式写成 `schema.table`，服务会在 SQL 外层包裹 `LIMIT/OFFSET`，默认返回 500 行，默认最大不超过 5000 行 | `offset` 可选默认 `0`，`limit` 可选默认 `500` | 原始 SQL 文本 | 查询结果文本 |
 | `/count` | `POST` | 统计一条 `SELECT/WITH` 查询会返回多少行，表名需要显式写成 `schema.table` | 无 | 原始 `SELECT/WITH` SQL 文本 | count 结果文本 |
+| `/explain` | `POST` | 查看一条 `SELECT/WITH` 查询的执行计划 | 无 | 原始 `SELECT/WITH` SQL 文本 | explain 结果文本 |
 
 ## 示例
 

@@ -22,6 +22,7 @@ If the user gives another host or port, use that instead.
 - Inspect table DDL.
 - Run readonly `SELECT` / `WITH` SQL.
 - Count rows for a `SELECT` / `WITH` SQL.
+- Explain a `SELECT` / `WITH` SQL.
 
 ## How To Use
 
@@ -65,6 +66,13 @@ POST /count
 Body: select * from schema.table
 ```
 
+Explain query:
+
+```text
+POST /explain
+Body: select * from schema.table
+```
+
 ## Results
 
 All responses are `text/plain`.
@@ -90,6 +98,8 @@ Do not rely on a default schema.
 - Use `/schemas`, `/tables`, and `/ddl` before writing SQL when table structure is unknown.
 - Use `/query` for sample rows and analysis queries.
 - Use `/count` when the user asks for quantity or total rows.
-- Send only `SELECT` or `WITH` SQL.
-- Do not send `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `CREATE`, or other mutation SQL.
+- Use `/explain` when the user asks about query plans or index usage.
+- Only run read-only query operations. Any non-query operation is invalid.
+- Do not include SQL comments.
+- Keep `limit` at or below `5000`.
 - If the API returns a SQL error, read the database error text and revise the SQL.
