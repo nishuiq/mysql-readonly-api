@@ -57,6 +57,8 @@ class QueryConfig:
 
     default_offset: int
     default_limit: int
+    max_limit: int
+    timeout_ms: int
 
 
 @dataclass(frozen=True)
@@ -74,7 +76,6 @@ def load_settings() -> Settings:
     config = load_config_dict()
     app = section(config, "app")
     server = section(config, "server")
-    query = section(config, "query")
     return Settings(
         app=AppConfig(
             name=str(app["name"]),
@@ -86,10 +87,7 @@ def load_settings() -> Settings:
             reload=bool(server["reload"]),
         ),
         mysql=mysql_config(config),
-        query=QueryConfig(
-            default_offset=int(query["default_offset"]),
-            default_limit=int(query["default_limit"]),
-        ),
+        query=query_config(config),
     )
 
 
@@ -130,6 +128,17 @@ def mysql_config(config: dict[str, Any]) -> MysqlConfig:
             recycle=int(pool["recycle"]),
             pre_ping=bool(pool["pre_ping"]),
         ),
+    )
+
+
+def query_config(config: dict[str, Any]) -> QueryConfig:
+    """读取查询配置。"""
+    query = section(config, "query")
+    return QueryConfig(
+        default_offset=int(query["default_offset"]),
+        default_limit=int(query["default_limit"]),
+        max_limit=int(query["max_limit"]),
+        timeout_ms=int(query["timeout_ms"]),
     )
 
 

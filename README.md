@@ -62,11 +62,16 @@ mysql:
 query:
   default_offset: 0
   default_limit: 500
+  max_limit: 5000
+  timeout_ms: 15000
 ```
 
 不配置默认 schema；查询时仍然需要显式写 `schema.table`。
 
 `app.sql_log: true` 时会在控制台打印 SQL 执行语句和参数，不打印查询结果。
+
+`query.max_limit` 控制 `/query` 单次最多返回多少行，默认 5000 行；`query.timeout_ms` 会设置 MySQL
+`max_execution_time`，控制每个 SELECT 查询最多执行多少毫秒。
 
 ## 接口
 
@@ -76,7 +81,7 @@ query:
 | `/schemas` | `GET` | 查看当前 MySQL 里有哪些业务 schema | 无 | 无 | schema 列表文本 |
 | `/tables` | `GET` | 在指定 schema 下搜索表，适合表很多时按关键字找表 | `schema` 必填，`keyword` 可选 | 无 | 表名、注释、估算行数文本 |
 | `/ddl` | `GET` | 查看一个或多个表的 IDEA 风格 DDL，包含字段、主键、唯一约束、普通索引 | `schema` 必填，`table` 必填；多个表可重复传 `table` 或用逗号分隔 | 无 | DDL 纯文本 |
-| `/query` | `POST` | 执行 `SELECT/WITH` SQL，表名需要显式写成 `schema.table`，服务会在 SQL 外层包裹 `LIMIT/OFFSET`，默认返回 500 行 | `offset` 可选默认 `0`，`limit` 可选默认 `500` | 原始 SQL 文本 | 查询结果文本 |
+| `/query` | `POST` | 执行 `SELECT/WITH` SQL，表名需要显式写成 `schema.table`，服务会在 SQL 外层包裹 `LIMIT/OFFSET`，默认返回 500 行，默认最大不超过 5000 行 | `offset` 可选默认 `0`，`limit` 可选默认 `500` | 原始 SQL 文本 | 查询结果文本 |
 | `/count` | `POST` | 统计一条 `SELECT/WITH` 查询会返回多少行，表名需要显式写成 `schema.table` | 无 | 原始 `SELECT/WITH` SQL 文本 | count 结果文本 |
 
 ## 示例

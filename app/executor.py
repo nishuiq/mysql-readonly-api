@@ -3,8 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from sqlalchemy import text
-from sqlmodel import Session
+from sqlmodel import Session, text
 
 from app.text_format import format_text_rows
 

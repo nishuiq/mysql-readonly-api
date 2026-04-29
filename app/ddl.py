@@ -4,8 +4,7 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from sqlalchemy import text
-from sqlmodel import Session
+from sqlmodel import Session, text
 
 from app.database import db_session
 from app.table_params import parse_table_names

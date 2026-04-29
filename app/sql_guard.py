@@ -4,9 +4,31 @@ from typing import Any
 from fastapi import HTTPException
 
 ALLOWED_FIRST_WORDS = {"select", "with"}
-FORBIDDEN_WORDS = re.compile(
-    r"\b(outfile|dumpfile|load_file)\b",
-    re.IGNORECASE,
+FORBIDDEN_PATTERNS = (
+    re.compile(r"/\*!", re.IGNORECASE),
+    re.compile(r"/\*\+", re.IGNORECASE),
+    re.compile(
+        r"\b("
+        r"insert|update|delete|replace|drop|alter|create|truncate|rename|"
+        r"grant|revoke|set|use|call|do|handler|load|"
+        r"lock|unlock|begin|start|commit|rollback|savepoint|"
+        r"prepare|execute|deallocate|analyze|optimize|repair|kill"
+        r")\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b("
+        r"for\s+update|lock\s+in\s+share\s+mode|for\s+share|nowait|skip\s+locked|"
+        r"into\s+outfile|into\s+dumpfile"
+        r")\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b("
+        r"load_file|sleep|benchmark|get_lock|release_lock|release_all_locks|is_free_lock|is_used_lock"
+        r")\s*\(",
+        re.IGNORECASE,
+    ),
 )
 
 
@@ -25,10 +47,15 @@ def clean_sql(sql: str) -> str:
     if first_word(cleaned) not in ALLOWED_FIRST_WORDS:
         raise HTTPException(status_code=400, detail="Only SELECT or WITH SQL is allowed.")
 
-    if FORBIDDEN_WORDS.search(cleaned):
+    if has_forbidden_pattern(cleaned):
         raise HTTPException(status_code=400, detail="SQL contains forbidden keyword.")
 
     return cleaned
+
+
+def has_forbidden_pattern(sql: str) -> bool:
+    """判断 SQL 是否包含明确禁止的高风险行为。"""
+    return any(pattern.search(sql) for pattern in FORBIDDEN_PATTERNS)
 
 
 def first_word(sql: str) -> str:

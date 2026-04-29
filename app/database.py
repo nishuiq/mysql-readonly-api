@@ -28,9 +28,16 @@ def mysql_connect_args() -> dict[str, object]:
     }
     if settings.mysql.use_ssl:
         args["ssl"] = {}
-    if settings.mysql.server_timezone:
-        args["init_command"] = f"SET time_zone = '{settings.mysql.server_timezone}'"
+    args["init_command"] = mysql_init_command()
     return args
+
+
+def mysql_init_command() -> str:
+    """生成 MySQL session 初始化语句。"""
+    items = [f"max_execution_time = {settings.query.timeout_ms}"]
+    if settings.mysql.server_timezone:
+        items.insert(0, f"time_zone = '{settings.mysql.server_timezone}'")
+    return "SET " + ", ".join(items)
 
 
 engine = create_engine(

@@ -27,3 +27,5 @@ mysql:
 query:
   default_offset: 0
   default_limit: 500
+  max_limit: 5000
+  timeout_ms: 15000

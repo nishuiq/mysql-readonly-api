@@ -37,7 +37,7 @@ def ddl(schema: str = Query(...), table: list[str] = Query(...)) -> Response:
 async def query(
     request: Request,
     offset: int = Query(settings.query.default_offset, ge=0),
-    limit: int = Query(settings.query.default_limit, ge=1),
+    limit: int = Query(settings.query.default_limit, ge=1, le=settings.query.max_limit),
 ) -> Response:
     """执行 SELECT/WITH 查询，默认在 SQL 外层限制返回行数。"""
     sql = await request.body()
