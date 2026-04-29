@@ -1,0 +1,29 @@
+app:
+  name: mysql-readonly-api
+  sql_log: true
+
+server:
+  host: 127.0.0.1
+  port: 8765
+  reload: false
+
+mysql:
+  host: 127.0.0.1
+  port: 3306
+  username: readonly
+  password: password
+  use_unicode: true
+  character_encoding: utf8
+  zero_datetime_behavior: convert_to_null
+  use_ssl: true
+  server_timezone: "+08:00"
+  pool:
+    size: 5
+    max_overflow: 10
+    timeout: 30
+    recycle: 3600
+    pre_ping: true
+
+query:
+  default_offset: 0
+  default_limit: 500

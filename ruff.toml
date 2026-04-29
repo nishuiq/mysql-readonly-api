@@ -1,0 +1,14 @@
+line-length = 120
+indent-width = 4
+# target-version = "py312"
+
+[format]
+# 使用双引号
+quote-style = "double"
+# 缩进使用空格
+indent-style = "space"
+# 启用docstring代码片段格式化
+docstring-code-format = true
+
+[lint]
+select = [ "E" , "F" , "I" , "UP", "W" ]
