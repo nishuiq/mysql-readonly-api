@@ -1,6 +1,6 @@
 ---
 name: mysql-readonly-api
-description: "Use when Codex needs to inspect or query a local readonly MySQL REST API: list schemas, search tables, inspect table DDL, run SELECT/WITH queries, or count query results."
+description: "Use when Codex needs to inspect or query a local readonly MySQL REST API: list schemas, search tables, inspect table DDL, run SELECT/WITH queries, explain queries, or count query results."
 ---
 
 # MySQL Readonly API
