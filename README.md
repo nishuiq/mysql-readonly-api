@@ -114,3 +114,31 @@ Windows 通常是：
 ```text
 C:\Users\<用户名>\.codex\skills\mysql-readonly-api
 ```
+
+## 针对线上数据库的使用
+
+如果线上 MySQL 只能通过 SSH 服务器访问，可以先建立本地端口转发：
+
+```powershell
+ssh -N -L 13306:<mysql_host>:<mysql_port> <ssh_user>@<ssh_host>
+```
+
+参数说明：
+
+| 参数 | 说明 |
+|---|---|
+| `13306` | 本机监听端口，可以按需换成未占用端口 |
+| `<mysql_host>:<mysql_port>` | SSH 服务器能访问到的 MySQL 地址和端口 |
+| `<ssh_user>@<ssh_host>` | SSH 服务器的登录用户和地址 |
+
+隧道建立后，在 `config.yaml` 中把 MySQL 地址配置为本机转发端口：
+
+```yaml
+mysql:
+  host: 127.0.0.1
+  port: 13306
+  username: readonly
+  password: password
+```
+
+保持 SSH 命令所在终端不关闭；服务访问 `127.0.0.1:13306` 时，会通过隧道连接到线上 MySQL。
