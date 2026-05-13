@@ -67,6 +67,18 @@ class SqlGuardTest(unittest.TestCase):
             with self.subTest(sql=sql):
                 self.assert_rejected(sql)
 
+    def test_rejects_user_variables(self) -> None:
+        for sql in [
+            "select password into @stolen from mysql.user where user = 'root'",
+            "select password from mysql.user into @stolen",
+            "select password into stolen from mysql.user where user = 'root'",
+            "select @stolen := password from mysql.user where user = 'root'",
+            "select @stolen",
+            "with q as (select @stolen := 1) select * from q",
+        ]:
+            with self.subTest(sql=sql):
+                self.assert_rejected(sql)
+
     def test_rejects_block_comments(self) -> None:
         for sql in [
             "select /* comment */ 1",

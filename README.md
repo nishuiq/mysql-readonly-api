@@ -30,6 +30,9 @@ python main.py
 
 运行前需要创建并填写 `config.yaml`。
 
+你可以复制 `config.example.yaml` 创建你自己的配置文件 `config.yaml`，并且一般的仅需修改 mysql 中：
+- host、port、username、password 即可
+
 MySQL 配置示例：
 
 ```yaml

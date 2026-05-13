@@ -18,10 +18,14 @@ FORBIDDEN_PATTERNS = (
     re.compile(
         r"\b("
         r"for\s+update|lock\s+in\s+share\s+mode|for\s+share|nowait|skip\s+locked|"
-        r"into\s+outfile|into\s+dumpfile"
+        # 拦截所有 SELECT ... INTO 变体，包括 OUTFILE/DUMPFILE 文件写出，
+        # 以及用户变量/局部变量赋值。
+        r"into"
         r")\b",
         re.IGNORECASE,
     ),
+    # 拦截 MySQL 用户/session 变量和表达式级赋值。
+    re.compile(r"@\w+|:=", re.IGNORECASE),
     re.compile(
         r"\b("
         r"load_file|sleep|benchmark|get_lock|release_lock|release_all_locks|is_free_lock|is_used_lock"
