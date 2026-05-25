@@ -10,6 +10,7 @@
 ```powershell
 uv sync
 uv run main.py
+uv run main.py --profile prod
 ```
 
 使用 `pip`：
@@ -19,6 +20,7 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e .
 python main.py
+python main.py --profile prod
 ```
 
 ## 配置
@@ -30,44 +32,83 @@ python main.py
 
 运行前需要创建并填写 `config.yaml`。
 
-你可以复制 `config.example.yaml` 创建你自己的配置文件 `config.yaml`，并且一般的仅需修改 mysql 中：
+你可以复制 `config.example.yaml` 创建你自己的配置文件 `config.yaml`，并且一般仅需修改对应 profile 的 `mysql` 中：
 - host、port、username、password 即可
 
-MySQL 配置示例：
+配置示例：
 
 ```yaml
+active: dev
+
 app:
   name: mysql-readonly-api
   sql_log: true
-
-server:
-  host: 127.0.0.1
-  port: 8765
-  reload: false
-
-mysql:
-  host: 127.0.0.1
-  port: 3306
-  username: readonly
-  password: password
-  use_unicode: true
-  character_encoding: utf8
-  zero_datetime_behavior: convert_to_null
-  use_ssl: true
-  server_timezone: "+08:00"
-  pool:
-    size: 5
-    max_overflow: 10
-    timeout: 30
-    recycle: 3600
-    pre_ping: true
 
 query:
   default_offset: 0
   default_limit: 500
   max_limit: 5000
   timeout_ms: 15000
+
+profiles:
+  dev:
+    server:
+      host: 127.0.0.1
+      port: 8765
+      reload: false
+    mysql:
+      host: 127.0.0.1
+      port: 3306
+      username: readonly
+      password: password
+      use_unicode: true
+      character_encoding: utf8
+      zero_datetime_behavior: convert_to_null
+      use_ssl: true
+      server_timezone: "+08:00"
+      pool:
+        size: 5
+        max_overflow: 10
+        timeout: 30
+        recycle: 3600
+        pre_ping: true
+
+  prod:
+    server:
+      host: 127.0.0.1
+      port: 8766
+      reload: false
+    mysql:
+      host: 127.0.0.1
+      port: 13306
+      username: readonly
+      password: password
+      use_unicode: true
+      character_encoding: utf8
+      zero_datetime_behavior: convert_to_null
+      use_ssl: true
+      server_timezone: "+08:00"
+      pool:
+        size: 5
+        max_overflow: 10
+        timeout: 30
+        recycle: 3600
+        pre_ping: true
 ```
+
+`active` 是默认启用的配置，可以通过命令行参数覆盖。优先级：
+
+```text
+--profile > active
+```
+
+示例：
+
+```powershell
+uv run main.py --profile prod
+```
+
+需要同时启用多个服务时，为不同 profile 配置不同的 `server.port`，分别启动即可。
 
 不配置默认 schema；查询时仍然需要显式写 `schema.table`。
 

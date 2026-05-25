@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -65,18 +66,22 @@ class QueryConfig:
 class Settings:
     """应用配置。"""
 
+    profile: str
     app: AppConfig
     server: ServerConfig
     mysql: MysqlConfig
     query: QueryConfig
 
 
-def load_settings() -> Settings:
+def load_settings(profile: str | None = None) -> Settings:
     """读取 YAML 并转换成配置对象。"""
     config = load_config_dict()
+    profile_name = resolve_profile_name(config, profile)
+    profile_config = selected_profile(config, profile_name)
     app = section(config, "app")
-    server = section(config, "server")
+    server = section(profile_config, "server")
     return Settings(
+        profile=profile_name,
         app=AppConfig(
             name=str(app["name"]),
             sql_log=bool(app["sql_log"]),
@@ -86,7 +91,7 @@ def load_settings() -> Settings:
             port=int(server["port"]),
             reload=bool(server["reload"]),
         ),
-        mysql=mysql_config(config),
+        mysql=mysql_config(profile_config),
         query=query_config(config),
     )
 
@@ -104,6 +109,33 @@ def section(config: dict[str, Any], name: str) -> dict[str, Any]:
     value = config.get(name, {})
     if not isinstance(value, dict):
         raise RuntimeError(f"Config section must be an object: {name}")
+    return value
+
+
+def resolve_profile_name(config: dict[str, Any], profile: str | None = None) -> str:
+    """解析当前启用的 profile。"""
+    selected = profile or cli_profile() or config.get("active")
+    if selected is None or str(selected).strip() == "":
+        raise RuntimeError("Active profile is required. Set active or pass --profile.")
+    return str(selected).strip()
+
+
+def cli_profile() -> str | None:
+    """从命令行参数读取 profile。"""
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--profile")
+    args, _ = parser.parse_known_args()
+    return args.profile
+
+
+def selected_profile(config: dict[str, Any], profile: str) -> dict[str, Any]:
+    """读取当前启用的 profile 配置。"""
+    profiles = section(config, "profiles")
+    value = profiles.get(profile)
+    if not isinstance(value, dict):
+        available = ", ".join(sorted(str(name) for name in profiles))
+        suffix = f" Available profiles: {available}." if available else ""
+        raise RuntimeError(f"Unknown profile: {profile}.{suffix}")
     return value
 
 
