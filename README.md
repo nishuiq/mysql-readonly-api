@@ -5,22 +5,12 @@
 
 ## 启动
 
-使用 `uv`：
+安装依赖并启动：
 
 ```powershell
 uv sync
 uv run main.py
 uv run main.py --profile prod
-```
-
-使用 `pip`：
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -e .
-python main.py
-python main.py --profile prod
 ```
 
 ## 配置
@@ -186,3 +176,7 @@ mysql:
 ```
 
 保持 SSH 命令所在终端不关闭；服务访问 `127.0.0.1:13306` 时，会通过隧道连接到线上 MySQL。
+
+## License
+
+MIT

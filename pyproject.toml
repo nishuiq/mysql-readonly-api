@@ -12,5 +12,3 @@ dependencies = [
     "uvicorn[standard]>=0.32.0",
 ]
 
-[project.scripts]
-mysql-readonly-api = "main:main"
