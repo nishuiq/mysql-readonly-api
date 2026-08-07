@@ -1,4 +1,4 @@
 interface:
   display_name: "MySQL Readonly API"
-  short_description: "Use a local readonly MySQL REST API."
-  default_prompt: "Use the MySQL readonly API to inspect schemas, tables, table info, query data, explain queries, or count rows."
+  short_description: "Query multiple readonly MySQL profiles."
+  default_prompt: "Use $mysql-readonly-api to discover the appropriate database profile and inspect or query it safely."

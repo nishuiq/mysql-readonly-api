@@ -6,9 +6,9 @@ from app.database import db_session
 from app.executor import run_sql
 
 
-def list_schemas() -> str:
+def list_schemas(profile: str) -> str:
     """列出业务 schema。"""
-    with db_session() as session:
+    with db_session(profile) as session:
         return run_sql(
             session,
             """
@@ -20,10 +20,10 @@ def list_schemas() -> str:
         )
 
 
-def list_tables(schema: str, keyword: str = "") -> str:
+def list_tables(profile: str, schema: str, keyword: str = "") -> str:
     """按 schema 和关键字搜索表。"""
     sql, params = table_search_sql(schema=schema, keyword=keyword)
-    with db_session() as session:
+    with db_session(profile) as session:
         return run_sql(session, sql, params=params)
 
 

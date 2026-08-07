@@ -10,24 +10,24 @@ from pathlib import Path
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "app" / "config.py"
 
 CONFIG_YAML = """
-active: dev
-
 app:
   name: mysql-readonly-api
   sql_log: true
 
+server:
+  host: 127.0.0.1
+  port: 8765
+  reload: false
+
 query:
-  default_offset: 0
   default_limit: 500
   max_limit: 5000
   timeout_ms: 15000
 
 profiles:
-  dev:
-    server:
-      host: 127.0.0.1
-      port: 8765
-      reload: false
+  example-dev:
+    enabled: true
+    description: Example development database
     mysql:
       host: 127.0.0.1
       port: 3306
@@ -45,11 +45,9 @@ profiles:
         recycle: 3600
         pre_ping: true
 
-  prod:
-    server:
-      host: 127.0.0.1
-      port: 8766
-      reload: false
+  example-prod:
+    enabled: false
+    description: Example production read-only database
     mysql:
       host: 10.0.0.1
       port: 13307
@@ -70,17 +68,13 @@ profiles:
 
 
 class ConfigTest(unittest.TestCase):
-    def load_settings(self, config_yaml: str, cli_profile: str | None = None):
+    def load_settings(self, config_yaml: str):
         old_cwd = Path.cwd()
-        old_argv = sys.argv[:]
         module_name = f"config_under_test_{uuid.uuid4().hex}"
 
         with tempfile.TemporaryDirectory() as temp_dir:
             Path(temp_dir, "config.yaml").write_text(textwrap.dedent(config_yaml), encoding="utf-8")
             os.chdir(temp_dir)
-            sys.argv = ["main.py"]
-            if cli_profile:
-                sys.argv.extend(["--profile", cli_profile])
 
             spec = importlib.util.spec_from_file_location(module_name, CONFIG_PATH)
             if spec is None or spec.loader is None:
@@ -92,27 +86,44 @@ class ConfigTest(unittest.TestCase):
                 return module.settings
             finally:
                 sys.modules.pop(module_name, None)
-                sys.argv = old_argv
                 os.chdir(old_cwd)
 
-    def test_uses_active_profile_by_default(self) -> None:
+    def test_loads_global_server_and_all_profiles(self) -> None:
         settings = self.load_settings(CONFIG_YAML)
 
-        self.assertEqual(settings.profile, "dev")
         self.assertEqual(settings.server.port, 8765)
-        self.assertEqual(settings.mysql.username, "readonly")
+        self.assertEqual(list(settings.profiles), ["example-dev", "example-prod"])
+        self.assertEqual(settings.profiles["example-dev"].description, "Example development database")
+        self.assertEqual(settings.profiles["example-prod"].mysql.host, "10.0.0.1")
+        self.assertEqual(settings.profiles["example-prod"].mysql.pool.size, 3)
 
-    def test_cli_profile_overrides_active(self) -> None:
-        settings = self.load_settings(CONFIG_YAML, cli_profile="prod")
+    def test_exposes_only_enabled_profiles(self) -> None:
+        settings = self.load_settings(CONFIG_YAML)
 
-        self.assertEqual(settings.profile, "prod")
-        self.assertEqual(settings.server.port, 8766)
-        self.assertEqual(settings.mysql.host, "10.0.0.1")
-        self.assertEqual(settings.mysql.pool.size, 3)
+        self.assertEqual(list(settings.enabled_profiles), ["example-dev"])
 
-    def test_rejects_unknown_profile(self) -> None:
-        with self.assertRaisesRegex(RuntimeError, "Unknown profile: missing"):
-            self.load_settings(CONFIG_YAML, cli_profile="missing")
+    def test_query_offset_is_not_configurable(self) -> None:
+        settings = self.load_settings(CONFIG_YAML)
+
+        self.assertFalse(hasattr(settings.query, "default_offset"))
+
+    def test_rejects_invalid_profile_name(self) -> None:
+        invalid_config = CONFIG_YAML.replace("  example-dev:\n", "  Example Dev:\n", 1)
+
+        with self.assertRaisesRegex(RuntimeError, "Invalid profile name: Example Dev"):
+            self.load_settings(invalid_config)
+
+    def test_requires_profile_description(self) -> None:
+        missing_description = CONFIG_YAML.replace("    description: Example development database\n", "", 1)
+
+        with self.assertRaisesRegex(RuntimeError, "Profile description is required: example-dev"):
+            self.load_settings(missing_description)
+
+    def test_requires_boolean_enabled(self) -> None:
+        invalid_enabled = CONFIG_YAML.replace("    enabled: true\n", "    enabled: yes please\n", 1)
+
+        with self.assertRaisesRegex(RuntimeError, "Profile enabled must be true or false: example-dev"):
+            self.load_settings(invalid_enabled)
 
 
 if __name__ == "__main__":

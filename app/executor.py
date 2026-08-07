@@ -13,4 +13,8 @@ def run_sql(session: Session, sql: str, params: Mapping[str, Any] | None = None)
     result = session.exec(text(sql), params=params)
     if not result.returns_rows:
         return "OK"
-    return format_text_rows(list(result.keys()), result.fetchall())
+    return format_text_rows(
+        list(result.keys()),
+        result.fetchall(),
+        zero_datetime_behavior=str(session.info.get("zero_datetime_behavior", "")),
+    )

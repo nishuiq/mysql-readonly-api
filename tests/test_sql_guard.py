@@ -20,7 +20,7 @@ class SqlGuardTest(unittest.TestCase):
             clean_sql(sql)
 
     def test_allows_plain_select(self) -> None:
-        self.assertEqual(clean_sql("select * from biz_order.order_main"), "select * from biz_order.order_main")
+        self.assertEqual(clean_sql("select * from example_app.orders"), "select * from example_app.orders")
 
     def test_allows_single_trailing_semicolon(self) -> None:
         self.assertEqual(clean_sql("select 1;"), "select 1")

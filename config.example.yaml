@@ -1,21 +1,21 @@
-active: dev
-
 app:
   name: mysql-readonly-api
   sql_log: true
 
+server:
+  host: 127.0.0.1
+  port: 8765
+  reload: false
+
 query:
-  default_offset: 0
   default_limit: 500
   max_limit: 5000
   timeout_ms: 15000
 
 profiles:
-  dev:
-    server:
-      host: 127.0.0.1
-      port: 8765
-      reload: false
+  example-dev:
+    enabled: true
+    description: Example development database
     mysql:
       host: 127.0.0.1
       port: 3306
@@ -33,11 +33,9 @@ profiles:
         recycle: 3600
         pre_ping: true
 
-  prod:
-    server:
-      host: 127.0.0.1
-      port: 8766
-      reload: false
+  example-prod:
+    enabled: false
+    description: Example production read-only database
     mysql:
       host: 127.0.0.1
       port: 13306

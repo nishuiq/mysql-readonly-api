@@ -8,11 +8,8 @@ def main() -> None:
     """启动 uvicorn 服务。"""
     import uvicorn
 
-    print(
-        f"Active profile: {settings.profile} | "
-        f"server={settings.server.host}:{settings.server.port} | "
-        f"mysql={settings.mysql.host}:{settings.mysql.port}"
-    )
+    enabled_profiles = ", ".join(settings.enabled_profiles) or "(none)"
+    print(f"server={settings.server.host}:{settings.server.port} | enabled profiles={enabled_profiles}")
 
     uvicorn.run(
         "main:app",

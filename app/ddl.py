@@ -42,13 +42,13 @@ FUNCTION_DEFAULT_PREFIXES = (
 )
 
 
-def table_ddl_text(schema: str, table: Sequence[str]) -> str:
+def table_ddl_text(profile: str, schema: str, table: Sequence[str]) -> str:
     """生成一个或多个表的 IDEA 风格 DDL。"""
     table_names = parse_table_names(table)
     unique_names = unique_table_names(table_names)
     if not unique_names:
         return ""
-    with db_session() as session:
+    with db_session(profile) as session:
         table_meta = table_metadata(session, schema, unique_names)
         columns = table_columns(session, schema, unique_names)
         indexes = table_indexes(session, schema, unique_names)

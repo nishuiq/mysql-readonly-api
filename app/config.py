@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import argparse
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -56,32 +56,45 @@ class MysqlConfig:
 class QueryConfig:
     """查询默认配置。"""
 
-    default_offset: int
     default_limit: int
     max_limit: int
     timeout_ms: int
 
 
 @dataclass(frozen=True)
+class ProfileConfig:
+    """一个可访问的 MySQL 数据库配置。"""
+
+    name: str
+    description: str
+    enabled: bool
+    mysql: MysqlConfig
+
+
+@dataclass(frozen=True)
 class Settings:
     """应用配置。"""
 
-    profile: str
     app: AppConfig
     server: ServerConfig
-    mysql: MysqlConfig
     query: QueryConfig
+    profiles: dict[str, ProfileConfig]
+
+    @property
+    def enabled_profiles(self) -> dict[str, ProfileConfig]:
+        """返回按配置顺序排列的已启用 profile。"""
+        return {name: profile for name, profile in self.profiles.items() if profile.enabled}
 
 
-def load_settings(profile: str | None = None) -> Settings:
+PROFILE_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+
+def load_settings() -> Settings:
     """读取 YAML 并转换成配置对象。"""
     config = load_config_dict()
-    profile_name = resolve_profile_name(config, profile)
-    profile_config = selected_profile(config, profile_name)
     app = section(config, "app")
-    server = section(profile_config, "server")
+    server = section(config, "server")
     return Settings(
-        profile=profile_name,
         app=AppConfig(
             name=str(app["name"]),
             sql_log=bool(app["sql_log"]),
@@ -91,8 +104,8 @@ def load_settings(profile: str | None = None) -> Settings:
             port=int(server["port"]),
             reload=bool(server["reload"]),
         ),
-        mysql=mysql_config(profile_config),
         query=query_config(config),
+        profiles=profile_configs(config),
     )
 
 
@@ -112,31 +125,29 @@ def section(config: dict[str, Any], name: str) -> dict[str, Any]:
     return value
 
 
-def resolve_profile_name(config: dict[str, Any], profile: str | None = None) -> str:
-    """解析当前启用的 profile。"""
-    selected = profile or cli_profile() or config.get("active")
-    if selected is None or str(selected).strip() == "":
-        raise RuntimeError("Active profile is required. Set active or pass --profile.")
-    return str(selected).strip()
-
-
-def cli_profile() -> str | None:
-    """从命令行参数读取 profile。"""
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--profile")
-    args, _ = parser.parse_known_args()
-    return args.profile
-
-
-def selected_profile(config: dict[str, Any], profile: str) -> dict[str, Any]:
-    """读取当前启用的 profile 配置。"""
+def profile_configs(config: dict[str, Any]) -> dict[str, ProfileConfig]:
+    """读取全部 profile，并校验用于 URL 路径的名称。"""
     profiles = section(config, "profiles")
-    value = profiles.get(profile)
-    if not isinstance(value, dict):
-        available = ", ".join(sorted(str(name) for name in profiles))
-        suffix = f" Available profiles: {available}." if available else ""
-        raise RuntimeError(f"Unknown profile: {profile}.{suffix}")
-    return value
+    result: dict[str, ProfileConfig] = {}
+    for raw_name, value in profiles.items():
+        name = str(raw_name).strip()
+        if not PROFILE_NAME_PATTERN.fullmatch(name):
+            raise RuntimeError(f"Invalid profile name: {name}. Use lowercase letters, numbers, '-' or '_'.")
+        if not isinstance(value, dict):
+            raise RuntimeError(f"Profile config must be an object: {name}")
+        description = str(value.get("description", "")).strip()
+        if not description:
+            raise RuntimeError(f"Profile description is required: {name}")
+        enabled = value.get("enabled", False)
+        if not isinstance(enabled, bool):
+            raise RuntimeError(f"Profile enabled must be true or false: {name}")
+        result[name] = ProfileConfig(
+            name=name,
+            description=description,
+            enabled=enabled,
+            mysql=mysql_config(value),
+        )
+    return result
 
 
 def mysql_config(config: dict[str, Any]) -> MysqlConfig:
@@ -167,7 +178,6 @@ def query_config(config: dict[str, Any]) -> QueryConfig:
     """读取查询配置。"""
     query = section(config, "query")
     return QueryConfig(
-        default_offset=int(query["default_offset"]),
         default_limit=int(query["default_limit"]),
         max_limit=int(query["max_limit"]),
         timeout_ms=int(query["timeout_ms"]),
