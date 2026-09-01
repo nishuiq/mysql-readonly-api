@@ -5,7 +5,7 @@ from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Any
 
-from fastapi import Response
+from fastapi import HTTPException, Response
 
 
 def format_value(value: Any, zero_datetime_behavior: str = "") -> str:
@@ -43,6 +43,29 @@ def format_text_rows(
     lines = ["\t".join(columns)]
     lines.extend("\t".join(row) for row in formatted_rows)
     return "\n".join(lines)
+
+
+def raw_value_response(column: str, value: Any) -> Response:
+    """返回“单列表头 + 原始字段内容”，不转义字段值。"""
+    if "\r" in column or "\n" in column:
+        raise HTTPException(
+            status_code=400,
+            detail="Raw query column name must be a single line.",
+        )
+
+    if value is None:
+        return Response(status_code=204)
+
+    prefix = column.encode("utf-8") + b"\n"
+    if isinstance(value, bytes):
+        return Response(
+            content=prefix + value,
+            media_type="text/plain; charset=utf-8",
+        )
+    return Response(
+        content=prefix + str(value).encode("utf-8"),
+        media_type="text/plain; charset=utf-8",
+    )
 
 
 def text_response(content: str, status_code: int = 200) -> Response:

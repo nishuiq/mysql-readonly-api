@@ -3,9 +3,11 @@ from typing import Any
 
 from fastapi import HTTPException
 
-ALLOWED_FIRST_WORDS = {"select", "with"}
+ALLOWED_FIRST_WORDS = {"select", "show", "with"}
+SELECT_FIRST_WORDS = {"select", "with"}
+COMMENT_PATTERN = re.compile(r"/\*|--|#", re.IGNORECASE)
 FORBIDDEN_PATTERNS = (
-    re.compile(r"/\*|--|#", re.IGNORECASE),
+    COMMENT_PATTERN,
     re.compile(
         r"\b("
         r"insert|update|delete|replace|drop|alter|create|truncate|rename|"
@@ -36,24 +38,45 @@ FORBIDDEN_PATTERNS = (
 
 
 def clean_sql(sql: str) -> str:
-    """做最小只读 SQL 检查。"""
+    """做最小只读 SQL 检查，允许 SELECT/WITH/SHOW。"""
     cleaned = sql.strip()
     if not cleaned:
-        raise HTTPException(status_code=400, detail="SQL is empty.")
+        raise_sql_error("SQL is empty.")
 
     if cleaned.endswith(";"):
         cleaned = cleaned[:-1].strip()
 
     if ";" in cleaned:
-        raise HTTPException(status_code=400, detail="Only one SQL statement is allowed.")
+        raise_sql_error("Only one SQL statement is allowed.")
 
-    if first_word(cleaned) not in ALLOWED_FIRST_WORDS:
-        raise HTTPException(status_code=400, detail="Only SELECT or WITH SQL is allowed.")
+    word = first_word(cleaned)
+    if word not in ALLOWED_FIRST_WORDS:
+        raise_sql_error("Only SELECT, WITH or SHOW SQL is allowed.")
+
+    # SHOW 是只读元数据语句，但 SHOW CREATE 本身包含 CREATE 关键字，
+    # 不能套用 SELECT 的禁词规则。仍禁止注释和多语句。
+    if word == "show":
+        if COMMENT_PATTERN.search(cleaned):
+            raise_sql_error("SQL comments are not allowed.")
+        return cleaned
 
     if has_forbidden_pattern(cleaned):
-        raise HTTPException(status_code=400, detail="SQL contains forbidden keyword.")
+        raise_sql_error("SQL contains forbidden keyword.")
 
     return cleaned
+
+
+def clean_select_sql(sql: str) -> str:
+    """清理只允许 SELECT/WITH 的 SQL，用于 count 和 explain。"""
+    cleaned = clean_sql(sql)
+    if first_word(cleaned) not in SELECT_FIRST_WORDS:
+        raise_sql_error("Only SELECT or WITH SQL is allowed for this operation.")
+    return cleaned
+
+
+def raise_sql_error(detail: str) -> None:
+    """抛出 SQL 请求异常。"""
+    raise HTTPException(status_code=400, detail=detail)
 
 
 def has_forbidden_pattern(sql: str) -> bool:

@@ -5,8 +5,8 @@ from fastapi import APIRouter, Body, Query, Response
 from app.config import settings
 from app.ddl import table_ddl_text
 from app.metadata import list_schemas, list_tables
-from app.query import count_text, explain_text, query_text
-from app.text_format import format_text_rows, text_response
+from app.query import count_text, explain_text, query_raw, query_text
+from app.text_format import format_text_rows, raw_value_response, text_response
 
 router = APIRouter()
 
@@ -48,12 +48,17 @@ def query(
     sql: Annotated[bytes, Body(media_type="text/plain")],
     offset: int = Query(0, ge=0),
     limit: int = Query(settings.query.default_limit, ge=1, le=settings.query.max_limit),
+    raw: bool = Query(False),
 ) -> Response:
-    """执行 SELECT/WITH 查询，默认在 SQL 外层限制返回行数。"""
+    """执行 SELECT/WITH/SHOW；raw 模式要求结果恰好为一行一列。"""
+    decoded_sql = sql.decode("utf-8")
+    if raw:
+        result = query_raw(profile=profile, sql=decoded_sql)
+        return raw_value_response(result.column, result.value)
     return text_response(
         query_text(
             profile=profile,
-            sql=sql.decode("utf-8"),
+            sql=decoded_sql,
             limit=limit,
             offset=offset,
         )

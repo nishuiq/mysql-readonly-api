@@ -3,8 +3,8 @@
 极简的多数据源 MySQL 只读 REST 服务。一个 Python 进程可以同时加载多个启用的 `profile`，调用方先发现
 profile，再在每个数据库请求的 URL 中显式指定 profile，不需要记忆端口与数据库环境的对应关系。
 
-所有接口返回 `text/plain`，不使用 `data/message/code` 外壳。结果集第一行是字段名，后续是数据行，字段之间
-使用 tab 分隔。
+所有接口返回纯文本，不使用 `data/message/code` 外壳。普通结果集第一行是字段名，后续是数据行，字段之间
+使用 tab 分隔。包含原始 Tab、换行或反斜杠的大文本应使用 `/query?raw=true` 单值模式读取。
 
 ## 启动
 
@@ -109,8 +109,8 @@ profiles:
 | `/profiles` | `GET` | 列出已启用的 profile 及其描述 | 无 |
 | `/profiles/{profile}/schemas` | `GET` | 列出指定 MySQL 中的业务 schema | 无 |
 | `/profiles/{profile}/tables` | `GET` | 搜索指定 schema 下的表 | `schema` 必填，`keyword` 可选 |
-| `/profiles/{profile}/ddl` | `GET` | 查看一个或多个表的 IDEA 风格 DDL | `schema`、`table` 必填；`table` 可重复或逗号分隔 |
-| `/profiles/{profile}/query` | `POST` | 执行只读 `SELECT/WITH` SQL | 原始 SQL 请求体；`offset`、`limit` 可选 |
+| `/profiles/{profile}/ddl` | `GET` | 查看一个或多个 Table/View 的 IDEA 风格 DDL | `schema`、`table` 必填；`table` 可重复或逗号分隔 |
+| `/profiles/{profile}/query` | `POST` | 执行只读 `SELECT/WITH/SHOW` SQL | 原始 SQL 请求体；`offset`、`limit`、`raw` 可选 |
 | `/profiles/{profile}/count` | `POST` | 统计查询结果行数 | 原始 `SELECT/WITH` SQL 请求体 |
 | `/profiles/{profile}/explain` | `POST` | 查看查询执行计划 | 原始 `SELECT/WITH` SQL 请求体 |
 
@@ -145,6 +145,36 @@ Invoke-RestMethod `
   -ContentType "text/plain" `
   -Body "select * from example_app.orders"
 ```
+
+`/query` 也支持 `SHOW`：
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://127.0.0.1:8765/profiles/example-dev/query" `
+  -ContentType "text/plain" `
+  -Body "show create table example_app.orders"
+```
+
+读取包含 Tab、换行或反斜杠的单个原始字段：
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://127.0.0.1:8765/profiles/example-dev/query?raw=true" `
+  -ContentType "text/plain" `
+  -Body "select routine_definition from information_schema.routines where routine_schema = 'example_app' and routine_name = 'example'"
+```
+
+Raw 查询必须恰好返回一行一列。成功时第一行是列名，第一个 LF 后的全部内容是字段原值，不执行 CR、LF、
+Tab 或反斜杠转换。空字符串返回 `200` 和空内容；SQL `NULL` 返回 `204`；没有结果行返回 `404`；多行或
+多列返回 `400`。
+
+`/ddl` 会区分 Table 和 View。View 源码可见时返回数据库的 `SHOW CREATE VIEW` 定义；源码不可见时返回
+`/* missing source code */` 占位以及可见的列注释，不会再把 View 渲染成 Table。
+
+普通 `SELECT/WITH` 查询仍受 `query.max_limit` 限制。需要读取超过 5000 行的完整结果时，先使用 `/count`，
+再使用稳定 `ORDER BY` 和 `offset/limit` 分页。
 
 ## Codex Skill
 

@@ -4,6 +4,8 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from fastapi import HTTPException
+from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import Session, text
 
 from app.database import db_session
@@ -50,18 +52,39 @@ def table_ddl_text(profile: str, schema: str, table: Sequence[str]) -> str:
         return ""
     with db_session(profile) as session:
         table_meta = table_metadata(session, schema, unique_names)
+        missing_names = [table_name for table_name in unique_names if table_name not in table_meta]
+        if missing_names:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Object not found: {schema}.{', '.join(missing_names)}",
+            )
         columns = table_columns(session, schema, unique_names)
         indexes = table_indexes(session, schema, unique_names)
-        return "\n\n".join(
-            render_table_ddl(
-                table=table_name,
-                table_meta=table_meta[table_name],
-                columns=columns.get(table_name, []),
-                indexes=indexes.get(table_name, {}),
+        foreign_keys = table_foreign_keys(session, schema, unique_names)
+        definitions: list[str] = []
+        for table_name in table_names:
+            metadata = table_meta.get(table_name)
+            if metadata is None:
+                continue
+            if str(metadata.get("table_type") or "").upper() == "VIEW":
+                definitions.append(
+                    render_view_ddl(
+                        table=table_name,
+                        create_sql=show_create_view(session, schema, table_name),
+                        columns=columns.get(table_name, []),
+                    )
+                )
+                continue
+            definitions.append(
+                render_table_ddl(
+                    table=table_name,
+                    table_meta=metadata,
+                    columns=columns.get(table_name, []),
+                    indexes=indexes.get(table_name, {}),
+                    foreign_keys=foreign_keys.get(table_name, {}),
+                )
             )
-            for table_name in table_names
-            if table_name in table_meta
-        )
+        return "\n\n".join(definitions)
 
 
 def render_table_ddl(
@@ -69,6 +92,7 @@ def render_table_ddl(
     table_meta: Mapping[str, Any],
     columns: Sequence[Mapping[str, Any]],
     indexes: Mapping[str, Sequence[Mapping[str, Any]]],
+    foreign_keys: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
 ) -> str:
     """生成单表 DDL 文本。"""
     primary_columns = index_columns(indexes.get("PRIMARY", []))
@@ -76,6 +100,7 @@ def render_table_ddl(
     body_items = column_items(columns, primary_columns)
     body_items.extend(primary_key_items(primary_columns))
     body_items.extend(unique_key_items(indexes))
+    body_items.extend(foreign_key_items(foreign_keys or {}))
 
     lines = [f"create table {ddl_ident(table)}", "("]
     for index, item in enumerate(body_items):
@@ -86,14 +111,45 @@ def render_table_ddl(
     return "\n".join(lines)
 
 
+def render_view_ddl(
+    table: str,
+    create_sql: str,
+    columns: Sequence[Mapping[str, Any]],
+) -> str:
+    """生成 IDEA 风格 View DDL；源码不可见时显式输出占位。"""
+    if create_sql:
+        normalized = create_sql.rstrip()
+        return normalized if normalized.endswith(";") else normalized + ";"
+
+    lines = [f"create view {ddl_ident(table)} as", "/* missing source code */", ";"]
+    for column in columns:
+        comment = str(column.get("column_comment") or "")
+        if not comment:
+            continue
+        safe_comment = comment.replace("\r", "\\r").replace("\n", "\\n").replace("*/", "* /")
+        lines.extend(
+            [
+                "",
+                (
+                    f"/* comment on column {ddl_ident(table)}.{ddl_ident(str(column['column_name']))} "
+                    f"not supported: {safe_comment} */"
+                ),
+            ]
+        )
+    return "\n".join(lines)
+
+
 def table_metadata(session: Session, schema: str, table_names: Sequence[str]) -> dict[str, Mapping[str, Any]]:
-    """批量读取表注释和字符集。"""
+    """批量读取对象类型、表属性、注释和字符集。"""
     table_filter, params = table_filter_params(schema, table_names)
     rows = fetch_rows(
         session,
         f"""
         SELECT
             t.TABLE_NAME AS table_name,
+            t.TABLE_TYPE AS table_type,
+            t.ENGINE AS engine,
+            t.TABLE_COLLATION AS table_collation,
             t.TABLE_COMMENT AS table_comment,
             c.CHARACTER_SET_NAME AS charset
         FROM information_schema.TABLES t
@@ -168,6 +224,62 @@ def table_indexes(
     return indexes
 
 
+def table_foreign_keys(
+    session: Session,
+    schema: str,
+    table_names: Sequence[str],
+) -> dict[str, dict[str, list[Mapping[str, Any]]]]:
+    """批量读取外键定义并按表名、约束名称分组。"""
+    table_filter, params = table_filter_params(schema, table_names)
+    rows = fetch_rows(
+        session,
+        f"""
+        SELECT
+            k.TABLE_NAME AS table_name,
+            k.CONSTRAINT_NAME AS constraint_name,
+            k.ORDINAL_POSITION AS ordinal_position,
+            k.COLUMN_NAME AS column_name,
+            k.REFERENCED_TABLE_SCHEMA AS referenced_table_schema,
+            k.REFERENCED_TABLE_NAME AS referenced_table_name,
+            k.REFERENCED_COLUMN_NAME AS referenced_column_name,
+            r.UPDATE_RULE AS update_rule,
+            r.DELETE_RULE AS delete_rule
+        FROM information_schema.KEY_COLUMN_USAGE k
+        JOIN information_schema.REFERENTIAL_CONSTRAINTS r
+          ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA
+         AND r.TABLE_NAME = k.TABLE_NAME
+         AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME
+        WHERE k.TABLE_SCHEMA = :schema
+          AND k.TABLE_NAME IN ({table_filter})
+          AND k.REFERENCED_TABLE_NAME IS NOT NULL
+        ORDER BY k.TABLE_NAME, k.CONSTRAINT_NAME, k.ORDINAL_POSITION
+        """,
+        params,
+    )
+    foreign_keys: dict[str, dict[str, list[Mapping[str, Any]]]] = {}
+    for row in rows:
+        keys_for_table = foreign_keys.setdefault(str(row["table_name"]), {})
+        keys_for_table.setdefault(str(row["constraint_name"]), []).append(row)
+    return foreign_keys
+
+
+def show_create_view(session: Session, schema: str, table: str) -> str:
+    """读取 MySQL 规范化后的 View 创建语句；不可见时返回空字符串。"""
+    try:
+        result = session.exec(text(f"SHOW CREATE VIEW {ddl_ident(schema)}.{ddl_ident(table)}"))
+        row = result.fetchone()
+    except SQLAlchemyError:
+        return ""
+    if row is None:
+        return ""
+    mapping = row._mapping
+    for key in ("Create View", "Create Table"):
+        value = mapping.get(key)
+        if value:
+            return str(value)
+    return ""
+
+
 def fetch_rows(session: Session, sql: str, params: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     """执行元数据查询并返回字典行。"""
     result = session.exec(text(sql), params=params)
@@ -198,7 +310,7 @@ def column_items(columns: Sequence[Mapping[str, Any]], primary_columns: Sequence
     items: list[str] = []
     for column in columns:
         column_name = str(column["column_name"])
-        parts = column_parts(column, is_primary=column_name in primary_columns)
+        parts = column_parts(column)
         line = f"    {ddl_ident(column_name).ljust(name_width)} {column_type(column).ljust(type_width)}"
         if parts:
             line = f"{line} {' '.join(parts)}"
@@ -208,7 +320,7 @@ def column_items(columns: Sequence[Mapping[str, Any]], primary_columns: Sequence
     return items
 
 
-def column_parts(column: Mapping[str, Any], is_primary: bool) -> list[str]:
+def column_parts(column: Mapping[str, Any]) -> list[str]:
     """生成字段类型后面的属性片段。"""
     parts: list[str] = []
     extra = str(column["extra"] or "")
@@ -224,8 +336,7 @@ def column_parts(column: Mapping[str, Any], is_primary: bool) -> list[str]:
     if default:
         parts.append(f"default {default}")
 
-    if not is_primary:
-        parts.append("null" if column["is_nullable"] == "YES" else "not null")
+    parts.append("null" if column["is_nullable"] == "YES" else "not null")
 
     on_update = on_update_sql(extra)
     if on_update:
@@ -256,6 +367,38 @@ def unique_key_items(indexes: Mapping[str, Sequence[Mapping[str, Any]]]) -> list
     return items
 
 
+def foreign_key_items(
+    foreign_keys: Mapping[str, Sequence[Mapping[str, Any]]],
+) -> list[str]:
+    """生成外键约束 DDL。"""
+    items: list[str] = []
+    for constraint_name, key_rows in sorted(foreign_keys.items()):
+        if not key_rows:
+            continue
+        rows = sorted(key_rows, key=lambda row: int(row["ordinal_position"]))
+        first = rows[0]
+        local_columns = column_list([ddl_ident(str(row["column_name"])) for row in rows])
+        referenced_columns = column_list(
+            [ddl_ident(str(row["referenced_column_name"])) for row in rows]
+        )
+        referenced_table = (
+            f"{ddl_ident(str(first['referenced_table_schema']))}."
+            f"{ddl_ident(str(first['referenced_table_name']))}"
+        )
+        item = (
+            f"    constraint {ddl_ident(constraint_name)}\n"
+            f"        foreign key ({local_columns}) references {referenced_table} ({referenced_columns})"
+        )
+        update_rule = str(first.get("update_rule") or "")
+        delete_rule = str(first.get("delete_rule") or "")
+        if update_rule:
+            item += f"\n            on update {update_rule.lower()}"
+        if delete_rule:
+            item += f"\n            on delete {delete_rule.lower()}"
+        items.append(item)
+    return items
+
+
 def index_items(table: str, indexes: Mapping[str, Sequence[Mapping[str, Any]]]) -> list[str]:
     """生成普通索引 DDL。"""
     items: list[str] = []
@@ -281,12 +424,18 @@ def index_items(table: str, indexes: Mapping[str, Sequence[Mapping[str, Any]]]) 
 def table_suffix(table_meta: Mapping[str, Any]) -> str:
     """生成 create table 结尾的表属性。"""
     options: list[str] = []
+    engine = str(table_meta.get("engine") or "")
     table_comment = str(table_meta.get("table_comment") or "")
     charset = str(table_meta.get("charset") or "")
-    if table_comment:
-        options.append(f"comment {sql_string(table_comment)}")
+    table_collation = str(table_meta.get("table_collation") or "")
+    if engine:
+        options.append(f"engine = {engine}")
     if charset:
         options.append(f"charset = {charset}")
+    if table_collation:
+        options.append(f"collate = {table_collation}")
+    if table_comment:
+        options.append(f"comment {sql_string(table_comment)}")
     if not options:
         return ");"
     return ")\n    " + " ".join(options) + ";"

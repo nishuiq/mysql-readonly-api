@@ -11,6 +11,7 @@ if SQL_GUARD_SPEC is None or SQL_GUARD_SPEC.loader is None:
 sql_guard = importlib.util.module_from_spec(SQL_GUARD_SPEC)
 SQL_GUARD_SPEC.loader.exec_module(sql_guard)
 clean_sql = sql_guard.clean_sql
+clean_select_sql = sql_guard.clean_select_sql
 explain_sql = sql_guard.explain_sql
 
 
@@ -24,6 +25,15 @@ class SqlGuardTest(unittest.TestCase):
 
     def test_allows_single_trailing_semicolon(self) -> None:
         self.assertEqual(clean_sql("select 1;"), "select 1")
+
+    def test_allows_show_sql(self) -> None:
+        sql = "show create view bi.example_view"
+
+        self.assertEqual(clean_sql(sql), sql)
+
+    def test_select_only_operations_reject_show(self) -> None:
+        with self.assertRaises(HTTPException):
+            clean_select_sql("show create table bi.example_table")
 
     def test_explain_wraps_clean_sql(self) -> None:
         self.assertEqual(explain_sql(clean_sql("select 1;")), "EXPLAIN select 1")
