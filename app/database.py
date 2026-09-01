@@ -3,7 +3,9 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import Any
 
+from sqlalchemy import event
 from sqlalchemy.engine import URL, Engine
 from sqlmodel import Session, create_engine
 
@@ -22,7 +24,7 @@ def mysql_url(mysql: MysqlConfig) -> URL:
     )
 
 
-def mysql_connect_args(mysql: MysqlConfig, query: QueryConfig) -> dict[str, object]:
+def mysql_connect_args(mysql: MysqlConfig) -> dict[str, object]:
     """根据配置生成 PyMySQL 连接参数。"""
     args: dict[str, object] = {
         "charset": mysql.character_encoding,
@@ -30,23 +32,27 @@ def mysql_connect_args(mysql: MysqlConfig, query: QueryConfig) -> dict[str, obje
     }
     if mysql.use_ssl:
         args["ssl"] = {}
-    args["init_command"] = mysql_init_command(mysql, query)
     return args
 
 
-def mysql_init_command(mysql: MysqlConfig, query: QueryConfig) -> str:
-    """生成 MySQL session 初始化语句。"""
-    items = [f"max_execution_time = {query.timeout_ms}"]
-    if mysql.server_timezone:
-        items.insert(0, f"time_zone = '{mysql.server_timezone}'")
-    return "SET " + ", ".join(items)
+def initialize_mysql_session(
+    dbapi_connection: Any,
+    mysql: MysqlConfig,
+    query: QueryConfig,
+) -> None:
+    """在物理连接建立时初始化 MySQL session。"""
+    with dbapi_connection.cursor() as cursor:
+        cursor.execute("SET SESSION TRANSACTION READ ONLY")
+        if mysql.server_timezone:
+            cursor.execute("SET SESSION time_zone = %s", (mysql.server_timezone,))
+        cursor.execute("SET SESSION max_execution_time = %s", (query.timeout_ms,))
 
 
 def create_mysql_engine(mysql: MysqlConfig) -> Engine:
     """为单个 profile 创建惰性 MySQL 连接池。"""
-    return create_engine(
+    engine = create_engine(
         mysql_url(mysql),
-        connect_args=mysql_connect_args(mysql, settings.query),
+        connect_args=mysql_connect_args(mysql),
         echo=settings.app.sql_log,
         pool_size=mysql.pool.size,
         max_overflow=mysql.pool.max_overflow,
@@ -54,6 +60,12 @@ def create_mysql_engine(mysql: MysqlConfig) -> Engine:
         pool_recycle=mysql.pool.recycle,
         pool_pre_ping=mysql.pool.pre_ping,
     )
+
+    def initialize_connection(dbapi_connection: Any, _connection_record: Any) -> None:
+        initialize_mysql_session(dbapi_connection, mysql, settings.query)
+
+    event.listen(engine, "connect", initialize_connection)
+    return engine
 
 
 @dataclass(frozen=True)

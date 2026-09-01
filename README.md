@@ -89,6 +89,7 @@ profiles:
 - `server` 只配置当前 REST 服务的监听地址，一个进程只有一份。
 - `profiles` 中的每一项代表一个 MySQL 数据源。
 - `enabled: true` 的 profile 会建立独立的惰性连接池并通过 API 暴露。
+- 每个新建的 MySQL 物理连接都会通过 `SET SESSION TRANSACTION READ ONLY` 初始化为只读。
 - `description` 会显示在 `/profiles` 中，帮助调用方选择正确的数据库环境。
 - profile 名只能包含小写字母、数字、`-` 和 `_`。
 - 禁用或不存在的 profile 均返回 `404 Unknown profile`。
