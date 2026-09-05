@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -10,61 +10,52 @@ import yaml
 
 @dataclass(frozen=True)
 class AppConfig:
-    """应用基础配置。"""
-
-    name: str
-    sql_log: bool
+    name: str = "mysql-readonly-api"
+    sql_log: bool = False
 
 
 @dataclass(frozen=True)
 class ServerConfig:
-    """服务启动配置。"""
-
-    host: str
-    port: int
-    reload: bool
+    host: str = "127.0.0.1"
+    port: int = 8765
+    reload: bool = False
 
 
 @dataclass(frozen=True)
 class MysqlPoolConfig:
-    """MySQL 连接池配置。"""
-
-    size: int
-    max_overflow: int
-    timeout: int
-    recycle: int
-    pre_ping: bool
+    size: int = 5
+    max_overflow: int = 10
+    timeout: int = 30
+    recycle: int = 3600
+    pre_ping: bool = True
 
 
 @dataclass(frozen=True)
 class MysqlConfig:
-    """MySQL 连接配置。"""
-
     host: str
-    port: int
     username: str
-    password: str
-    use_unicode: bool
-    character_encoding: str
-    zero_datetime_behavior: str
-    use_ssl: bool
-    server_timezone: str
-    pool: MysqlPoolConfig
+    password: str = field(repr=False)
+    port: int = 3306
+    use_unicode: bool = True
+    character_encoding: str = "utf8mb4"
+    use_ssl: bool = True
+    ssl_ca: str | None = None
+    server_timezone: str = "+08:00"
+    connect_timeout: int = 10
+    read_timeout: int = 30
+    write_timeout: int = 30
+    pool: MysqlPoolConfig = field(default_factory=MysqlPoolConfig)
 
 
 @dataclass(frozen=True)
 class QueryConfig:
-    """查询默认配置。"""
-
-    default_limit: int
-    max_limit: int
-    timeout_ms: int
+    default_limit: int = 500
+    max_limit: int = 5000
+    timeout_ms: int = 15000
 
 
 @dataclass(frozen=True)
 class ProfileConfig:
-    """一个可访问的 MySQL 数据库配置。"""
-
     name: str
     description: str
     enabled: bool
@@ -73,8 +64,6 @@ class ProfileConfig:
 
 @dataclass(frozen=True)
 class Settings:
-    """应用配置。"""
-
     app: AppConfig
     server: ServerConfig
     query: QueryConfig
@@ -82,106 +71,131 @@ class Settings:
 
     @property
     def enabled_profiles(self) -> dict[str, ProfileConfig]:
-        """返回按配置顺序排列的已启用 profile。"""
         return {name: profile for name, profile in self.profiles.items() if profile.enabled}
 
 
-PROFILE_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+PROFILE_NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]*")
 
 
-def load_settings() -> Settings:
-    """读取 YAML 并转换成配置对象。"""
-    config = load_config_dict()
+def load_settings(path: str | Path = "config.yaml") -> Settings:
+    """仅在应用创建时读取配置，导入模块不会访问本地配置或数据库。"""
+    config_path = Path(path)
+    if not config_path.is_file():
+        raise RuntimeError(f"Config file not found: {config_path}")
+    try:
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    except yaml.YAMLError:
+        # YAML parser errors can contain credentials from the source line.
+        raise RuntimeError(f"Invalid YAML configuration: {config_path}") from None
+    return settings_from_dict(config if config is not None else {})
+
+
+def settings_from_dict(config: dict[str, Any]) -> Settings:
+    if not isinstance(config, dict):
+        raise RuntimeError("Config must be an object.")
     app = section(config, "app")
     server = section(config, "server")
     return Settings(
         app=AppConfig(
-            name=str(app["name"]),
-            sql_log=bool(app["sql_log"]),
+            name=string_value(app, "name", "mysql-readonly-api"),
+            sql_log=bool_value(app, "sql_log", False),
         ),
         server=ServerConfig(
-            host=str(server["host"]),
-            port=int(server["port"]),
-            reload=bool(server["reload"]),
+            host=string_value(server, "host", "127.0.0.1"),
+            port=int_value(server, "port", 8765, maximum=65535),
+            reload=bool_value(server, "reload", False),
         ),
         query=query_config(config),
         profiles=profile_configs(config),
     )
 
 
-def load_config_dict() -> dict[str, Any]:
-    """读取 YAML 配置文件。"""
-    config_path = Path("config.yaml")
-    if not config_path.exists():
-        raise RuntimeError(f"Config file not found: {config_path}")
-    return yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-
-
 def section(config: dict[str, Any], name: str) -> dict[str, Any]:
-    """读取指定配置段。"""
     value = config.get(name, {})
     if not isinstance(value, dict):
         raise RuntimeError(f"Config section must be an object: {name}")
     return value
 
 
+def bool_value(config: dict[str, Any], name: str, default: bool) -> bool:
+    value = config.get(name, default)
+    if not isinstance(value, bool):
+        raise RuntimeError(f"Config {name} must be true or false.")
+    return value
+
+
+def int_value(config: dict[str, Any], name: str, default: int, minimum: int = 1, maximum: int | None = None) -> int:
+    value = config.get(name, default)
+    if type(value) is not int or value < minimum or (maximum is not None and value > maximum):
+        bounds = f"{minimum}..{maximum}" if maximum is not None else f">= {minimum}"
+        raise RuntimeError(f"Config {name} must be an integer {bounds}.")
+    return value
+
+
+def string_value(config: dict[str, Any], name: str, default: str | None = None, *, empty: bool = False) -> str:
+    value = config.get(name, default)
+    if not isinstance(value, str) or (not empty and not value.strip()):
+        raise RuntimeError(f"Config {name} must be {'a' if empty else 'a non-empty'} string.")
+    return value
+
+
 def profile_configs(config: dict[str, Any]) -> dict[str, ProfileConfig]:
-    """读取全部 profile，并校验用于 URL 路径的名称。"""
-    profiles = section(config, "profiles")
     result: dict[str, ProfileConfig] = {}
-    for raw_name, value in profiles.items():
-        name = str(raw_name).strip()
-        if not PROFILE_NAME_PATTERN.fullmatch(name):
-            raise RuntimeError(f"Invalid profile name: {name}. Use lowercase letters, numbers, '-' or '_'.")
+    for name, value in section(config, "profiles").items():
+        if not isinstance(name, str) or not PROFILE_NAME_PATTERN.fullmatch(name):
+            raise RuntimeError("Invalid profile name. Use lowercase letters, numbers, '-' or '_'.")
         if not isinstance(value, dict):
             raise RuntimeError(f"Profile config must be an object: {name}")
-        description = str(value.get("description", "")).strip()
-        if not description:
-            raise RuntimeError(f"Profile description is required: {name}")
-        enabled = value.get("enabled", False)
-        if not isinstance(enabled, bool):
-            raise RuntimeError(f"Profile enabled must be true or false: {name}")
         result[name] = ProfileConfig(
             name=name,
-            description=description,
-            enabled=enabled,
+            description=string_value(value, "description").strip(),
+            enabled=bool_value(value, "enabled", False),
             mysql=mysql_config(value),
         )
     return result
 
 
 def mysql_config(config: dict[str, Any]) -> MysqlConfig:
-    """读取 MySQL 配置。"""
     mysql = section(config, "mysql")
     pool = section(mysql, "pool")
+    if "zero_datetime_behavior" in mysql:
+        raise RuntimeError("Config zero_datetime_behavior was removed; delete it to preserve returned values.")
+    ssl_ca = mysql.get("ssl_ca")
+    if ssl_ca is not None and (not isinstance(ssl_ca, str) or not ssl_ca.strip()):
+        raise RuntimeError("Config ssl_ca must be a certificate path or null.")
+    use_ssl = bool_value(mysql, "use_ssl", True)
+    if ssl_ca and not use_ssl:
+        raise RuntimeError("Config ssl_ca requires use_ssl: true.")
     return MysqlConfig(
-        host=str(mysql["host"]),
-        port=int(mysql["port"]),
-        username=str(mysql["username"]),
-        password=str(mysql["password"]),
-        use_unicode=bool(mysql["use_unicode"]),
-        character_encoding=str(mysql["character_encoding"]),
-        zero_datetime_behavior=str(mysql["zero_datetime_behavior"]),
-        use_ssl=bool(mysql["use_ssl"]),
-        server_timezone=str(mysql["server_timezone"]),
+        host=string_value(mysql, "host"),
+        port=int_value(mysql, "port", 3306, maximum=65535),
+        username=string_value(mysql, "username"),
+        password=string_value(mysql, "password", empty=True),
+        use_unicode=bool_value(mysql, "use_unicode", True),
+        character_encoding=string_value(mysql, "character_encoding", "utf8mb4"),
+        use_ssl=use_ssl,
+        ssl_ca=ssl_ca,
+        server_timezone=string_value(mysql, "server_timezone", "+08:00", empty=True),
+        connect_timeout=int_value(mysql, "connect_timeout", 10),
+        read_timeout=int_value(mysql, "read_timeout", 30),
+        write_timeout=int_value(mysql, "write_timeout", 30),
         pool=MysqlPoolConfig(
-            size=int(pool["size"]),
-            max_overflow=int(pool["max_overflow"]),
-            timeout=int(pool["timeout"]),
-            recycle=int(pool["recycle"]),
-            pre_ping=bool(pool["pre_ping"]),
+            size=int_value(pool, "size", 5),
+            max_overflow=int_value(pool, "max_overflow", 10, minimum=0),
+            timeout=int_value(pool, "timeout", 30),
+            recycle=int_value(pool, "recycle", 3600),
+            pre_ping=bool_value(pool, "pre_ping", True),
         ),
     )
 
 
 def query_config(config: dict[str, Any]) -> QueryConfig:
-    """读取查询配置。"""
     query = section(config, "query")
-    return QueryConfig(
-        default_limit=int(query["default_limit"]),
-        max_limit=int(query["max_limit"]),
-        timeout_ms=int(query["timeout_ms"]),
+    result = QueryConfig(
+        default_limit=int_value(query, "default_limit", 500),
+        max_limit=int_value(query, "max_limit", 5000),
+        timeout_ms=int_value(query, "timeout_ms", 15000),
     )
-
-
-settings = load_settings()
+    if result.default_limit > result.max_limit:
+        raise RuntimeError("Config default_limit must not exceed max_limit.")
+    return result

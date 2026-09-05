@@ -1,42 +1,47 @@
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
-from app.executor import RawQueryValue
-from app.query import query_raw, query_text
+from fastapi import HTTPException
+
+from app.executor import QueryResult, read_result, run_query
+from app.query import query_result
 
 
 class QueryTest(unittest.TestCase):
-    def test_show_executes_without_paging_wrapper(self) -> None:
-        session = Mock()
-        context = Mock()
-        context.__enter__ = Mock(return_value=session)
-        context.__exit__ = Mock(return_value=False)
+    def setUp(self):
+        self.session = Mock(info={"sql_mode": ""})
 
-        with patch("app.query.db_session", return_value=context), patch(
-            "app.query.run_sql", return_value="result"
-        ) as run_sql:
-            result = query_text("example", "show create table app.orders", limit=10, offset=0)
+    def test_show_is_unwrapped_but_limited(self):
+        with patch("app.query.run_query", return_value="result") as execute:
+            self.assertEqual(query_result(self.session, "show create event app.e", 2, 0), "result")
+        execute.assert_called_once_with(self.session, "show create event app.e", limit=2)
+        with self.assertRaisesRegex(HTTPException, "SHOW does not support"):
+            query_result(self.session, "show tables", 2, 1)
 
-        self.assertEqual(result, "result")
-        run_sql.assert_called_once_with(session, "show create table app.orders")
+    def test_select_fetches_limit_plus_one(self):
+        with patch("app.query.run_query") as execute:
+            query_result(self.session, "select 1 limit 1", 2, 4)
+        self.assertIn("select 1 limit 1\n)", execute.call_args.args[1])
+        self.assertIn("LIMIT 3 OFFSET 4", execute.call_args.args[1])
 
-    def test_raw_select_uses_two_row_shape_guard(self) -> None:
-        session = Mock()
-        context = Mock()
-        context.__enter__ = Mock(return_value=session)
-        context.__exit__ = Mock(return_value=False)
-        raw_value = RawQueryValue(column="definition", value="body")
+    def test_truncation_is_based_on_extra_row(self):
+        for rows, expected in [([], False), ([(1,)], False), ([(1,), (2,)], False), ([(1,), (2,), (3,)], True)]:
+            with self.subTest(rows=rows):
+                result = Mock(returns_rows=True)
+                result.keys.return_value = ["id"]
+                result.fetchmany.return_value = rows
+                self.assertEqual(read_result(result, 2), QueryResult(["id"], rows[:2], expected))
+                result.fetchmany.assert_called_once_with(3)
+                result.fetchall.assert_not_called()
 
-        with patch("app.query.db_session", return_value=context), patch(
-            "app.query.run_raw_sql", return_value=raw_value
-        ) as run_raw_sql:
-            result = query_raw("example", "select definition from app.routines")
-
-        self.assertEqual(result, raw_value)
-        called_sql = run_raw_sql.call_args.args[1]
-        self.assertIn("LIMIT :_codex_limit OFFSET :_codex_offset", called_sql)
-        self.assertEqual(run_raw_sql.call_args.kwargs["params"]["_codex_limit"], 2)
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_user_sql_is_never_bound_as_a_template(self):
+        session = MagicMock()
+        cursor = session.connection.return_value.exec_driver_sql.return_value.__enter__.return_value
+        cursor.keys.return_value = ["v"]
+        cursor.fetchall.return_value = [(":name 100% %(x)s",)]
+        sql = "select ':name 100% %(x)s' as v"
+        self.assertEqual(run_query(session, sql).rows, [(":name 100% %(x)s",)])
+        session.connection.return_value.exec_driver_sql.assert_called_once_with(
+            sql,
+            execution_options={"no_parameters": True},
+        )

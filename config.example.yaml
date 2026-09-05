@@ -1,11 +1,7 @@
-app:
-  name: mysql-readonly-api
-  sql_log: true
-
+# All omitted options use the defaults documented in README.md.
 server:
   host: 127.0.0.1
   port: 8765
-  reload: false
 
 query:
   default_limit: 500
@@ -14,41 +10,14 @@ query:
 
 profiles:
   example-dev:
-    enabled: true
+    enabled: false # Fill in credentials, then enable.
     description: Example development database
     mysql:
-      host: 127.0.0.1
+      host: localhost
       port: 3306
       username: readonly
-      password: password
-      use_unicode: true
-      character_encoding: utf8
-      zero_datetime_behavior: convert_to_null
+      password: "replace-me"
       use_ssl: true
+      # ssl_ca: "C:/certificates/mysql-ca.pem"
+      # For a deliberately unencrypted local connection, set use_ssl: false.
       server_timezone: "+08:00"
-      pool:
-        size: 5
-        max_overflow: 10
-        timeout: 30
-        recycle: 3600
-        pre_ping: true
-
-  example-prod:
-    enabled: false
-    description: Example production read-only database
-    mysql:
-      host: 127.0.0.1
-      port: 13306
-      username: readonly
-      password: password
-      use_unicode: true
-      character_encoding: utf8
-      zero_datetime_behavior: convert_to_null
-      use_ssl: true
-      server_timezone: "+08:00"
-      pool:
-        size: 5
-        max_overflow: 10
-        timeout: 30
-        recycle: 3600
-        pre_ping: true

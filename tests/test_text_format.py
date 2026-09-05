@@ -1,40 +1,54 @@
+import json
 import unittest
+from datetime import date, datetime, timedelta
+from decimal import Decimal
 
-from app.text_format import format_text_rows, format_value, raw_value_response
+from app.executor import QueryResult
+from app.text_format import format_text_rows, format_value, result_response
 
 
 class TextFormatTest(unittest.TestCase):
-    def test_zero_datetime_behavior_is_request_specific(self) -> None:
-        value = "0000-00-00 00:00:00"
+    def test_strings_are_not_modified(self):
+        for value in ["line1\nline2", r"line1\nline2", "a\tb", "a\rb", "NULL", "0000-00-00 text", ""]:
+            with self.subTest(value=value):
+                self.assertEqual(format_value(value), value)
 
-        self.assertEqual(format_value(value, "convert_to_null"), "NULL")
-        self.assertEqual(format_value(value, "preserve"), value)
+    def test_truncated_marker_has_no_blank_line_or_paging_details(self):
+        self.assertEqual(format_text_rows(["id"], [(1,)], True), "[truncated]\nid\n1")
+        self.assertEqual(format_text_rows(["id"], [(1,)]), "id\n1")
 
-    def test_formats_tab_separated_rows(self) -> None:
-        result = format_text_rows(["name", "note"], [("dev", "line 1\nline 2")])
+    def test_empty_and_null_results_succeed(self):
+        self.assertEqual(result_response(QueryResult(["v"], [])).body, b"v")
+        self.assertEqual(result_response(QueryResult(["v"], [(None,)])).body, b"v\nNULL")
 
-        self.assertEqual(result, "name\tnote\ndev\tline 1\\nline 2")
+    def test_json_preserves_distinctions_and_duplicate_names(self):
+        values = (None, "NULL", r"\N", "\n\t\r\\", "", b"\x00\xff")
+        response = result_response(QueryResult(["v"] * 6, [values], True), "json")
+        self.assertEqual(
+            json.loads(response.body),
+            {
+                "columns": ["v"] * 6,
+                "rows": [[None, "NULL", r"\N", "\n\t\r\\", "", {"hex": "00ff"}]],
+                "truncated": True,
+            },
+        )
+        self.assertNotIn(b": ", response.body)
 
-    def test_raw_value_preserves_text_exactly(self) -> None:
-        value = "BEGIN\r\n\tSELECT 'literal \\n';\n中文\nEND"
-
-        response = raw_value_response("definition", value)
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.body, ("definition\n" + value).encode("utf-8"))
-
-    def test_raw_null_uses_no_content(self) -> None:
-        response = raw_value_response("definition", None)
-
-        self.assertEqual(response.status_code, 204)
-        self.assertEqual(response.body, b"")
-
-    def test_raw_bytes_are_returned_as_plain_text(self) -> None:
-        response = raw_value_response("definition", b"left\tright\n")
-
-        self.assertEqual(response.headers["content-type"], "text/plain; charset=utf-8")
-        self.assertEqual(response.body, b"definition\nleft\tright\n")
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_mysql_scalar_conventions(self):
+        values = (
+            Decimal("12345678901234567890.123450"),
+            date(2025, 1, 2),
+            datetime(2025, 1, 2, 3, 4, 5),
+            timedelta(hours=-49, microseconds=-1),
+        )
+        actual = json.loads(result_response(QueryResult(["a", "b", "c", "d"], [values]), "json").body)
+        self.assertEqual(
+            actual["rows"][0],
+            [
+                "12345678901234567890.123450",
+                "2025-01-02",
+                "2025-01-02 03:04:05",
+                "-49:00:00.000001",
+            ],
+        )
+        self.assertEqual(format_value(b"\x00\xff"), "0x00ff")

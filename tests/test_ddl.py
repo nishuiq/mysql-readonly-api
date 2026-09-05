@@ -1,9 +1,83 @@
 import unittest
+from unittest.mock import MagicMock, Mock, patch
 
-from app.ddl import render_table_ddl, render_view_ddl
+import pymysql
+from fastapi import HTTPException
+from sqlalchemy.exc import ProgrammingError
+
+from app.ddl import (
+    column_type,
+    ddl_ident,
+    default_sql,
+    on_update_sql,
+    render_table_ddl,
+    render_view_ddl,
+    show_create_view,
+    sql_string,
+    table_checks,
+    table_indexes,
+)
+from app.table_params import parse_table_names
 
 
 class DdlTest(unittest.TestCase):
+    def test_string_defaults_are_not_guessed_as_sql_expressions(self):
+        for value in ["NULL", "CURRENT_TIMESTAMP", "UUID()", "NOW()", "a'b\\c"]:
+            column = {"column_default": value, "data_type": "varchar", "extra": ""}
+            self.assertEqual(default_sql(column), sql_string(value))
+        self.assertEqual(default_sql({"column_default": None, "data_type": "varchar"}), "")
+        self.assertEqual(
+            default_sql({"column_default": "CURRENT_TIMESTAMP(6)", "data_type": "timestamp"}), "CURRENT_TIMESTAMP(6)"
+        )
+        self.assertEqual(
+            default_sql({"column_default": "uuid()", "data_type": "varchar", "extra": "DEFAULT_GENERATED"}), "(uuid())"
+        )
+        self.assertEqual(sql_string("a'b\\c", no_backslash=True), "'a''b\\c'")
+        self.assertEqual(
+            on_update_sql("DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6) INVISIBLE"),
+            "on update CURRENT_TIMESTAMP(6)",
+        )
+
+    def test_identifier_and_type_formatting_preserves_literals(self):
+        for value in ["enum('x,1','int(11)')", "set('a,2')", "int(5) unsigned zerofill"]:
+            self.assertEqual(column_type({"column_type": value}), value)
+        self.assertEqual(column_type({"column_type": "decimal(10,2)"}), "decimal(10, 2)")
+        self.assertEqual(ddl_ident("select"), "`select`")
+        self.assertEqual(ddl_ident("a`b:100%"), "`a``b:100%`")
+
+    def test_mysql_57_never_requests_mysql_8_catalog_fields(self):
+        session = Mock(info={"mysql_version": (5, 7, 44)})
+        with patch("app.ddl.fetch_rows", return_value=[]) as fetch:
+            table_indexes(session, "app", ["table"])
+            sql = fetch.call_args.args[1]
+            self.assertIn("NULL AS expression", sql)
+            self.assertIn("'YES' AS is_visible", sql)
+            self.assertNotIn("EXPRESSION", sql)
+            self.assertNotIn("IS_VISIBLE", sql)
+            fetch.reset_mock()
+            self.assertEqual(table_checks(session, "app", ["table"]), {})
+            fetch.assert_not_called()
+
+    def test_view_fallback_is_only_for_permission_errors(self):
+        session = MagicMock()
+        execute = session.connection.return_value.exec_driver_sql
+        for number in [1142, 1064, 2013]:
+            error = ProgrammingError("", {}, pymysql.err.ProgrammingError(number, "driver message"))
+            execute.side_effect = error
+            if number == 1142:
+                self.assertEqual(show_create_view(session, "app", "view"), "")
+            else:
+                with self.assertRaises(ProgrammingError):
+                    show_create_view(session, "app", "view")
+
+    def test_table_parameters_keep_quoted_names_and_deduplicate(self):
+        self.assertEqual(
+            parse_table_names(["a,b", "a", "`a,b`,`a``b`,` spaced `"]), ["a", "b", "a,b", "a`b", " spaced "]
+        )
+        for value in ["`missing", "`a`oops"]:
+            with self.assertRaises(HTTPException):
+                parse_table_names([value])
+
     def test_table_ddl_keeps_primary_not_null_and_foreign_key(self) -> None:
         table_meta = {
             "table_comment": "Example",

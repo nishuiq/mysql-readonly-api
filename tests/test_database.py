@@ -1,80 +1,67 @@
+import ssl
 import unittest
+from dataclasses import replace
+from unittest.mock import MagicMock, patch
 
-from app.config import MysqlConfig, MysqlPoolConfig, QueryConfig
-from app.database import initialize_mysql_session, mysql_connect_args
+import pymysql
 
-
-class RecordingCursor:
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, tuple[object, ...] | None]] = []
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback) -> None:
-        return None
-
-    def execute(self, sql: str, params: tuple[object, ...] | None = None) -> None:
-        self.calls.append((sql, params))
-
-
-class RecordingConnection:
-    def __init__(self) -> None:
-        self.recording_cursor = RecordingCursor()
-
-    def cursor(self) -> RecordingCursor:
-        return self.recording_cursor
-
-
-def mysql_config(server_timezone: str = "+08:00") -> MysqlConfig:
-    return MysqlConfig(
-        host="127.0.0.1",
-        port=3306,
-        username="readonly",
-        password="password",
-        use_unicode=True,
-        character_encoding="utf8",
-        zero_datetime_behavior="convert_to_null",
-        use_ssl=False,
-        server_timezone=server_timezone,
-        pool=MysqlPoolConfig(
-            size=5,
-            max_overflow=10,
-            timeout=30,
-            recycle=3600,
-            pre_ping=True,
-        ),
-    )
+from app.config import MysqlConfig, QueryConfig, settings_from_dict
+from app.database import Databases, initialize_mysql_session, mysql_connect_args
+from app.errors import DatabaseConnectionError
 
 
 class DatabaseTest(unittest.TestCase):
-    def test_connect_args_only_contain_driver_options(self) -> None:
+    def setUp(self):
+        self.mysql = MysqlConfig(host="localhost", username="reader", password="secret", use_ssl=False)
+
+    def test_driver_options_and_actual_tls_enablement(self):
+        args = mysql_connect_args(self.mysql)
+        self.assertEqual(args["local_infile"], False)
+        self.assertEqual(args["read_timeout"], 30)
+        self.assertTrue(args["ssl_disabled"])
+        secure_args = mysql_connect_args(replace(self.mysql, use_ssl=True))
+        self.assertIsInstance(secure_args["ssl"], ssl.SSLContext)
+        self.assertEqual(secure_args["ssl"].verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(secure_args["ssl"].check_hostname)
+        connection = pymysql.connect(defer_connect=True, **secure_args)
+        self.assertTrue(connection.ssl)
+
+    def test_initializes_read_only_and_reads_mode(self):
+        connection = MagicMock()
+        cursor = connection.cursor.return_value.__enter__.return_value
+        cursor.fetchone.return_value = ("NO_BACKSLASH_ESCAPES",)
+        self.assertEqual(initialize_mysql_session(connection, self.mysql, QueryConfig()), "NO_BACKSLASH_ESCAPES")
         self.assertEqual(
-            mysql_connect_args(mysql_config()),
-            {
-                "charset": "utf8",
-                "use_unicode": True,
-            },
-        )
-
-    def test_initializes_each_new_session_as_read_only(self) -> None:
-        connection = RecordingConnection()
-
-        initialize_mysql_session(
-            connection,
-            mysql_config(),
-            QueryConfig(default_limit=500, max_limit=5000, timeout_ms=15000),
-        )
-
-        self.assertEqual(
-            connection.recording_cursor.calls,
+            [call.args for call in cursor.execute.call_args_list],
             [
-                ("SET SESSION TRANSACTION READ ONLY", None),
+                ("SET SESSION TRANSACTION READ ONLY",),
                 ("SET SESSION time_zone = %s", ("+08:00",)),
                 ("SET SESSION max_execution_time = %s", (15000,)),
+                ("SELECT @@SESSION.sql_mode",),
             ],
         )
 
+    def test_tls_cannot_silently_fall_back_to_plaintext(self):
+        connection = MagicMock(_secure=False)
+        with self.assertRaises(DatabaseConnectionError):
+            initialize_mysql_session(connection, replace(self.mysql, use_ssl=True), QueryConfig())
+        connection.cursor.assert_not_called()
 
-if __name__ == "__main__":
-    unittest.main()
+    def test_each_application_owns_and_disposes_its_pools(self):
+        settings = settings_from_dict(
+            {
+                "profiles": {
+                    "dev": {
+                        "enabled": True,
+                        "description": "test",
+                        "mysql": {"host": "localhost", "username": "reader", "password": "secret", "use_ssl": False},
+                    },
+                }
+            }
+        )
+        with patch("app.database.create_mysql_engine", side_effect=[MagicMock(), MagicMock()]):
+            first, second = Databases(settings), Databases(settings)
+        self.assertIsNot(first.engines["dev"], second.engines["dev"])
+        first.dispose()
+        first.engines["dev"].dispose.assert_called_once()
+        second.engines["dev"].dispose.assert_not_called()

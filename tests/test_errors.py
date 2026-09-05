@@ -1,35 +1,74 @@
+import ssl
 import unittest
 
+import pymysql
 from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
+from sqlalchemy.exc import OperationalError, ProgrammingError, TimeoutError
 
-from app.errors import register_exception_handlers
+from app.errors import database_error, register_exception_handlers
+
+
+def sql_error(number, message):
+    return ProgrammingError(
+        "SELECT secret FROM private", {"password": "secret"}, pymysql.err.ProgrammingError(number, message)
+    )
 
 
 class ErrorsTest(unittest.TestCase):
-    def setUp(self) -> None:
-        self.app = FastAPI()
-        register_exception_handlers(self.app)
+    def test_tls_error_identifies_certificate_problem_without_exposing_host(self):
+        original = pymysql.err.OperationalError(2003, "Could not connect to private-host")
+        original.original_exception = ssl.SSLCertVerificationError("private certificate detail")
+        status, message = database_error(OperationalError("", {}, original))
+        self.assertEqual(status, 503)
+        self.assertIn("TLS certificate verification failed", message)
+        self.assertNotIn("private", message)
 
-    def test_http_error_returns_status_and_plain_text(self) -> None:
-        handler = self.app.exception_handlers[HTTPException]
-        response = handler(
-            None,
-            HTTPException(
-                status_code=400,
-                detail="Bad SQL",
-            ),
+    def test_mysql_error_is_actionable_without_sqlalchemy_wrapper(self):
+        status, message = database_error(sql_error(1054, "Unknown column 'missing' in 'field list'"))
+        self.assertEqual(status, 400)
+        self.assertIn("MySQL 1054", message)
+        self.assertIn("missing", message)
+        self.assertNotIn("secret", message)
+        self.assertNotIn("SELECT", message)
+
+    def test_connection_details_are_hidden(self):
+        status, message = database_error(
+            OperationalError(
+                "", {}, pymysql.err.OperationalError(1045, "Access denied for user 'private-user'@'private-host'")
+            )
         )
+        self.assertEqual(status, 503)
+        self.assertNotIn("private", message)
 
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.body, b"Bad SQL")
+    def test_error_categories(self):
+        for number, expected in [
+            (1142, 403),
+            (1792, 403),
+            (1146, 404),
+            (3024, 504),
+            (2013, 503),
+            (1064, 400),
+            (1060, 400),
+        ]:
+            with self.subTest(number=number):
+                self.assertEqual(database_error(sql_error(number, "driver message"))[0], expected)
+        self.assertIn("alias", database_error(sql_error(1060, "duplicate"))[1])
+        self.assertEqual(database_error(TimeoutError())[0], 503)
 
-    def test_unhandled_error_does_not_leak_exception_text(self) -> None:
-        handler = self.app.exception_handlers[Exception]
-        response = handler(None, RuntimeError("secret internal detail"))
+    def test_framework_errors_are_text_and_keep_allow_header(self):
+        app = FastAPI()
+        register_exception_handlers(app)
 
-        self.assertEqual(response.status_code, 500)
-        self.assertNotIn(b"secret internal detail", response.body)
+        @app.get("/error")
+        def error():
+            raise HTTPException(403, "No access.")
 
-
-if __name__ == "__main__":
-    unittest.main()
+        with TestClient(app) as client:
+            for path, expected in [("/absent", 404), ("/error", 403)]:
+                response = client.get(path)
+                self.assertEqual(response.status_code, expected)
+                self.assertTrue(response.headers["content-type"].startswith("text/plain"))
+            response = client.post("/error")
+            self.assertEqual(response.status_code, 405)
+            self.assertIn("GET", response.headers["allow"])

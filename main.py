@@ -1,18 +1,15 @@
-from app import create_app
-from app.config import settings
-
-app = create_app()
+from app.config import load_settings
 
 
 def main() -> None:
-    """启动 uvicorn 服务。"""
     import uvicorn
 
+    settings = load_settings()
     enabled_profiles = ", ".join(settings.enabled_profiles) or "(none)"
     print(f"server={settings.server.host}:{settings.server.port} | enabled profiles={enabled_profiles}")
-
     uvicorn.run(
-        "main:app",
+        "app.factory:create_app",
+        factory=True,
         host=settings.server.host,
         port=settings.server.port,
         reload=settings.server.reload,

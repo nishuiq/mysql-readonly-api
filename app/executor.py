@@ -4,53 +4,34 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from fastapi import HTTPException
 from sqlmodel import Session, text
-
-from app.text_format import format_text_rows
 
 
 @dataclass(frozen=True)
-class RawQueryValue:
-    """一行一列 raw 查询的字段名和值。"""
+class QueryResult:
+    columns: list[str]
+    rows: list[tuple[Any, ...]]
+    truncated: bool = False
 
-    column: str
-    value: Any
 
-
-def run_sql(session: Session, sql: str, params: Mapping[str, Any] | None = None) -> str:
-    """执行 SQL 并返回纯文本结果。"""
-    result = session.exec(text(sql), params=params)
+def read_result(result: Any, limit: int | None = None) -> QueryResult:
     if not result.returns_rows:
-        return "OK"
-    return format_text_rows(
-        list(result.keys()),
-        result.fetchall(),
-        zero_datetime_behavior=str(session.info.get("zero_datetime_behavior", "")),
-    )
+        return QueryResult([], [])
+    columns = [str(column) for column in result.keys()]
+    rows = result.fetchall() if limit is None else result.fetchmany(limit + 1)
+    truncated = limit is not None and len(rows) > limit
+    return QueryResult(columns, [tuple(row) for row in rows[:limit]], truncated)
 
 
-def run_raw_sql(session: Session, sql: str, params: Mapping[str, Any] | None = None) -> RawQueryValue:
-    """执行 SQL，并要求结果恰好为一行一列。"""
-    result = session.exec(text(sql), params=params)
-    if not result.returns_rows:
-        raise_raw_shape_error("Raw query must return rows.")
-
-    columns = list(result.keys())
-    if len(columns) != 1:
-        raise_raw_shape_error("Raw query must return exactly one column.")
-
-    rows = result.fetchmany(2)
-    if not rows:
-        raise HTTPException(
-            status_code=404,
-            detail="Raw query returned no row.",
-        )
-    if len(rows) != 1:
-        raise_raw_shape_error("Raw query must return exactly one row.")
-    return RawQueryValue(column=str(columns[0]), value=rows[0][0])
+def run_query(session: Session, sql: str, limit: int | None = None) -> QueryResult:
+    """原始 SQL 不参与参数模板解释；冒号、百分号及反斜杠保持原义。"""
+    with session.connection().exec_driver_sql(sql, execution_options={"no_parameters": True}) as result:
+        return read_result(result, limit)
 
 
-def raise_raw_shape_error(detail: str) -> None:
-    """抛出 raw 查询结果形状错误。"""
-    raise HTTPException(status_code=400, detail=detail)
+def run_sql(
+    session: Session, sql: str, params: Mapping[str, Any] | None = None, limit: int | None = None
+) -> QueryResult:
+    """服务内部构造的元数据 SQL 使用绑定参数。"""
+    with session.exec(text(sql), params=params) as result:
+        return read_result(result, limit)
