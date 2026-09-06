@@ -196,6 +196,9 @@ uv run python -m unittest discover -s tests -v
 分别在 5.7 和 8.x 执行可覆盖真实驱动与版本差异。
 实例配置了可信 TLS 证书时，可另设 `MYSQL_TEST_SSL_CA` 指向 CA 文件，启用真实 TLS 验证。
 
+本地临时测试环境、下载包和日志统一放在项目 `temp/` 下，该目录已被 Git 忽略。
+MySQL ZIP 包、解压程序、测试数据和证书可集中放在 `temp/mysql-integration/`，测试结束后关闭实例。
+
 ## License
 
 MIT

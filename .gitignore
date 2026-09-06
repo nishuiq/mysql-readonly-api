@@ -11,3 +11,6 @@ wheels/
 
 # Local config
 config.yaml
+
+# Local test runtimes and temporary files
+/temp/
