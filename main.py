@@ -1,7 +1,14 @@
+"""通过完整配置启动本地 MySQL 只读 REST 服务"""
+
 from app.config import load_settings
 
 
 def main() -> None:
+    """读取启动配置并运行 Uvicorn 服务
+
+    Raises:
+        RuntimeError: 配置文件无法读取或配置不符合约束
+    """
     import uvicorn
 
     settings = load_settings()

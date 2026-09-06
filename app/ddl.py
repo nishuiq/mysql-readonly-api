@@ -1,3 +1,5 @@
+"""按 MySQL 版本读取元数据并生成用于阅读的紧凑 DDL"""
+
 from __future__ import annotations
 
 import re
@@ -12,7 +14,7 @@ from sqlmodel import Session, text
 from app.errors import mysql_error_number
 from app.table_params import parse_table_names
 
-# Render literal SQL, without the DBAPI percent-escaping used by format/pyformat.
+# 生成可直接阅读或执行的 SQL，不使用 format/pyformat 模板的百分号转义
 IDENTIFIER_PREPARER = dialect(paramstyle="named").identifier_preparer
 INTEGER_DISPLAY_WIDTH = re.compile(r"^(tinyint|smallint|mediumint|int|integer|bigint)\(\d+\)", re.IGNORECASE)
 STRING_DEFAULT_TYPES = {
@@ -38,7 +40,20 @@ STRING_DEFAULT_TYPES = {
 
 
 def table_ddl_text(session: Session, schema: str, table: Sequence[str]) -> str:
-    """批量读取紧凑 DDL；版本分支只影响元数据字段，不重写用户 SQL。"""
+    """批量生成表或视图的紧凑结构描述
+
+    Args:
+        session: 附带 SQL mode 和服务端版本的只读会话
+        schema: 对象所属的 schema 名称
+        table: 重复参数或逗号分隔的对象名，支持反引号引用
+
+    Returns:
+        按请求顺序去重后的 DDL，各对象间用空行分隔
+
+    Raises:
+        HTTPException: 没有有效对象名、引用格式错误或对象不存在、不可见
+        SQLAlchemyError: 元数据查询失败，视图权限不足时可输出源码占位
+    """
     names = parse_table_names(table)
     if not names:
         raise HTTPException(422, "query.table: provide at least one table name.")
@@ -80,7 +95,20 @@ def render_table_ddl(
     checks: Sequence[Mapping[str, Any]] = (),
     no_backslash: bool = False,
 ) -> str:
-    """生成单表 DDL 文本。"""
+    """将一张表的元数据渲染为对齐的结构摘要
+
+    Args:
+        table: 表名称
+        table_meta: 表引擎、字符集、排序规则、注释及额外选项
+        columns: 按字段顺序排列的列元数据
+        indexes: 按索引名称分组的索引部分
+        foreign_keys: 按约束名称分组的外键，为 None 时没有外键
+        checks: 当前版本可见的 CHECK 约束，空序列表示没有约束
+        no_backslash: 当前会话是否启用 NO_BACKSLASH_ESCAPES
+
+    Returns:
+        包含字段与索引的紧凑 DDL，额外表选项可能仅提示使用原生定义
+    """
     primary_columns = index_columns(indexes.get("PRIMARY", []))
 
     inline_primary = (
@@ -117,7 +145,16 @@ def render_view_ddl(
     create_sql: str,
     columns: Sequence[Mapping[str, Any]],
 ) -> str:
-    """生成 IDEA 风格 View DDL；源码不可见时显式输出占位。"""
+    """展示原生视图定义或明确的源码缺失占位
+
+    Args:
+        table: 视图名称
+        create_sql: SHOW CREATE VIEW 返回的源码，空字符串表示不可见
+        columns: 可见列的元数据，仅在源码缺失时用于展示列注释
+
+    Returns:
+        补齐结尾分号的视图源码，或带 missing source code 的占位文本
+    """
     if create_sql:
         normalized = create_sql.rstrip()
         return normalized if normalized.endswith(";") else normalized + ";"
@@ -141,7 +178,19 @@ def render_view_ddl(
 
 
 def table_metadata(session: Session, schema: str, table_names: Sequence[str]) -> dict[str, Mapping[str, Any]]:
-    """批量读取对象类型、表属性、注释和字符集。"""
+    """批量读取对象类型与表级属性
+
+    Args:
+        session: 当前请求的只读会话
+        schema: 目标 schema 名称
+        table_names: 非空且已去重的对象名称序列
+
+    Returns:
+        按数据库实际对象名索引的属性映射，不可见对象不包含在其中
+
+    Raises:
+        SQLAlchemyError: 表级元数据查询失败
+    """
     table_filter, params = table_filter_params(schema, table_names)
     rows = fetch_rows(
         session,
@@ -166,7 +215,19 @@ def table_metadata(session: Session, schema: str, table_names: Sequence[str]) ->
 
 
 def table_columns(session: Session, schema: str, table_names: Sequence[str]) -> dict[str, list[Mapping[str, Any]]]:
-    """批量读取字段定义。"""
+    """批量读取按字段顺序排列的列定义
+
+    Args:
+        session: 当前请求的只读会话
+        schema: 目标 schema 名称
+        table_names: 非空且已去重的对象名称序列
+
+    Returns:
+        按对象名称分组的列定义，包括默认值、生成表达式和列级字符集
+
+    Raises:
+        SQLAlchemyError: 字段元数据查询失败
+    """
     table_filter, params = table_filter_params(schema, table_names)
     rows = fetch_rows(
         session,
@@ -201,7 +262,19 @@ def table_indexes(
     schema: str,
     table_names: Sequence[str],
 ) -> dict[str, dict[str, list[Mapping[str, Any]]]]:
-    """批量读取索引定义并按表名、索引名称分组。"""
+    """按版本批量读取索引的组成与属性
+
+    Args:
+        session: 包含 mysql_version 信息的只读会话
+        schema: 目标 schema 名称
+        table_names: 非空且已去重的表名序列
+
+    Returns:
+        先按表名再按索引名分组的索引部分，5.7 使用空表达式与可见状态占位
+
+    Raises:
+        SQLAlchemyError: 索引元数据查询失败
+    """
     table_filter, params = table_filter_params(schema, table_names)
     version = session.info["mysql_version"]
     expression = "EXPRESSION" if version >= (8, 0, 13) else "NULL"
@@ -240,7 +313,19 @@ def table_foreign_keys(
     schema: str,
     table_names: Sequence[str],
 ) -> dict[str, dict[str, list[Mapping[str, Any]]]]:
-    """批量读取外键定义并按表名、约束名称分组。"""
+    """批量读取外键引用与级联规则
+
+    Args:
+        session: 当前请求的只读会话
+        schema: 目标 schema 名称
+        table_names: 非空且已去重的表名序列
+
+    Returns:
+        先按表名再按约束名分组的外键字段和引用规则
+
+    Raises:
+        SQLAlchemyError: 外键元数据查询失败
+    """
     table_filter, params = table_filter_params(schema, table_names)
     rows = fetch_rows(
         session,
@@ -279,7 +364,20 @@ def table_checks(
     schema: str,
     table_names: Sequence[str],
 ) -> dict[str, list[Mapping[str, Any]]]:
-    # 5.7 parses but does not enforce/store CHECK constraints; the catalog is 8.0.16+.
+    # 5.7 不存储和执行 CHECK 约束，对应元数据表从 8.0.16 起可用
+    """读取支持版本中存储的 CHECK 约束
+
+    Args:
+        session: 包含 mysql_version 信息的只读会话
+        schema: 目标 schema 名称
+        table_names: 非空且已去重的表名序列
+
+    Returns:
+        按表名分组的约束，低于 MySQL 8.0.16 时直接返回空映射
+
+    Raises:
+        SQLAlchemyError: 支持版本上的 CHECK 元数据查询失败
+    """
     if session.info["mysql_version"] < (8, 0, 16):
         return {}
     table_filter, params = table_filter_params(schema, table_names)
@@ -304,7 +402,19 @@ def table_checks(
 
 
 def show_create_view(session: Session, schema: str, table: str) -> str:
-    """仅权限不足时降级；连接、语法、失效视图等异常正常反馈。"""
+    """读取原生视图源码并仅对权限不足降级
+
+    Args:
+        session: 当前请求的只读会话
+        schema: 视图所属的 schema 名称
+        table: 视图名称，引用时保留反引号、百分号等字符原意
+
+    Returns:
+        原生视图源码，权限不足、没有结果或没有源码值时为空字符串
+
+    Raises:
+        SQLAlchemyError: 连接、无效视图或其他非权限错误，不静默隐藏这些失败
+    """
     name = f"{IDENTIFIER_PREPARER.quote_identifier(schema)}.{IDENTIFIER_PREPARER.quote_identifier(table)}"
     try:
         with session.connection().exec_driver_sql(
@@ -323,13 +433,33 @@ def show_create_view(session: Session, schema: str, table: str) -> str:
 
 
 def fetch_rows(session: Session, sql: str, params: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-    """执行元数据查询并返回字典行。"""
+    """执行内部元数据模板并读取映射结果
+
+    Args:
+        session: 当前请求的只读会话
+        sql: 服务构造的 SQL 模板
+        params: 模板的绑定参数，不拼接为 SQL 文本
+
+    Returns:
+        按数据库返回顺序组织的行映射，空结果返回空列表
+
+    Raises:
+        SQLAlchemyError: 模板执行或结果读取失败
+    """
     with session.exec(text(sql), params=params) as result:
         return [dict(row._mapping) for row in result.fetchall()]
 
 
 def table_filter_params(schema: str, table_names: Sequence[str]) -> tuple[str, dict[str, Any]]:
-    """生成批量表名过滤条件参数。"""
+    """为批量对象查询构造名称占位符
+
+    Args:
+        schema: 目标 schema 名称
+        table_names: 待查询的非空对象名序列
+
+    Returns:
+        逗号分隔的占位符片段，以及包含 schema 和对象名的参数映射
+    """
     params: dict[str, Any] = {"schema": schema}
     placeholders: list[str] = []
     for index, table_name in enumerate(table_names):
@@ -345,7 +475,17 @@ def column_items(
     table_meta: Mapping[str, Any],
     no_backslash: bool,
 ) -> list[str]:
-    """生成字段 DDL 行。"""
+    """渲染字段定义并在适用时内联单列主键
+
+    Args:
+        columns: 按声明顺序排列的列元数据
+        primary_columns: 允许内联的主键字段表达式，空序列表示不内联
+        table_meta: 用于比较列级字符集和排序规则的表属性
+        no_backslash: 当前会话是否启用 NO_BACKSLASH_ESCAPES
+
+    Returns:
+        对齐后的字段文本列表，每项尚未添加分隔逗号
+    """
     name_width = max((len(ddl_ident(str(column["column_name"]))) for column in columns), default=0)
     type_width = max((len(column_type(column)) for column in columns), default=0)
     single_primary = len(primary_columns) == 1
@@ -363,7 +503,16 @@ def column_items(
 
 
 def column_parts(column: Mapping[str, Any], table_meta: Mapping[str, Any], no_backslash: bool) -> list[str]:
-    """生成字段类型后面的属性片段。"""
+    """生成列类型之后的属性片段
+
+    Args:
+        column: 单列元数据，包含默认值、可空性、额外属性和生成表达式
+        table_meta: 列属性所参照的表级字符集与排序规则
+        no_backslash: 当前会话是否启用 NO_BACKSLASH_ESCAPES
+
+    Returns:
+        按 DDL 顺序排列的列属性，保留生成列存储方式与实际默认值含义
+    """
     parts: list[str] = []
     extra = str(column["extra"] or "")
     extra_lower = extra.lower()
@@ -400,7 +549,15 @@ def column_parts(column: Mapping[str, Any], table_meta: Mapping[str, Any], no_ba
 
 
 def unique_key_items(indexes: Mapping[str, Sequence[Mapping[str, Any]]], no_backslash: bool) -> list[str]:
-    """生成唯一索引约束 DDL。"""
+    """渲染非主键的唯一索引约束
+
+    Args:
+        indexes: 按索引名称分组的组成与属性
+        no_backslash: 当前会话是否启用 NO_BACKSLASH_ESCAPES
+
+    Returns:
+        按索引名排序的唯一约束文本列表
+    """
     items: list[str] = []
     for index_name, index_rows in sorted(indexes.items()):
         if index_name == "PRIMARY" or not index_rows or int(index_rows[0]["non_unique"]) != 0:
@@ -415,7 +572,14 @@ def unique_key_items(indexes: Mapping[str, Sequence[Mapping[str, Any]]], no_back
 def foreign_key_items(
     foreign_keys: Mapping[str, Sequence[Mapping[str, Any]]],
 ) -> list[str]:
-    """生成外键约束 DDL。"""
+    """渲染外键字段顺序与引用规则
+
+    Args:
+        foreign_keys: 按约束名称分组的外键字段及引用对象
+
+    Returns:
+        按约束名排序的外键片段，包含可见的更新和删除规则
+    """
     items: list[str] = []
     for constraint_name, key_rows in sorted(foreign_keys.items()):
         if not key_rows:
@@ -446,7 +610,16 @@ def index_items(
     indexes: Mapping[str, Sequence[Mapping[str, Any]]],
     no_backslash: bool,
 ) -> list[str]:
-    """生成普通索引 DDL。"""
+    """渲染普通、全文和空间索引语句
+
+    Args:
+        table: 索引所属的表名称
+        indexes: 按索引名称分组的组成与属性
+        no_backslash: 当前会话是否启用 NO_BACKSLASH_ESCAPES
+
+    Returns:
+        非主键、非唯一索引的独立创建语句列表
+    """
     items: list[str] = []
     for index_name, index_rows in sorted(indexes.items()):
         if index_name == "PRIMARY" or not index_rows or int(index_rows[0]["non_unique"]) == 0:
@@ -469,7 +642,15 @@ def index_items(
 
 
 def table_suffix(table_meta: Mapping[str, Any], no_backslash: bool) -> str:
-    """生成 create table 结尾的表属性。"""
+    """生成表定义结尾的主要属性
+
+    Args:
+        table_meta: 表引擎、字符集、排序规则和注释
+        no_backslash: 当前会话是否启用 NO_BACKSLASH_ESCAPES
+
+    Returns:
+        以右括号开始、分号结束的表属性文本，没有可见属性时直接结束
+    """
     options: list[str] = []
     engine = str(table_meta.get("engine") or "")
     table_comment = str(table_meta.get("table_comment") or "")
@@ -489,7 +670,14 @@ def table_suffix(table_meta: Mapping[str, Any], no_backslash: bool) -> str:
 
 
 def index_columns(index_rows: Sequence[Mapping[str, Any]]) -> list[str]:
-    """按索引顺序读取索引字段。"""
+    """按索引内部顺序渲染字段或表达式
+
+    Args:
+        index_rows: 同一索引的各个组成部分，包括位置、前缀长度与排序方向
+
+    Returns:
+        排序后的索引字段或表达式文本，保留前缀长度和降序信息
+    """
     rows = sorted(index_rows, key=lambda row: int(row["seq_in_index"]))
     columns: list[str] = []
     for row in rows:
@@ -504,11 +692,27 @@ def index_columns(index_rows: Sequence[Mapping[str, Any]]) -> list[str]:
 
 
 def column_list(columns: Sequence[str]) -> str:
-    """生成逗号分隔字段列表。"""
+    """将已引用的字段表达式组合为列表
+
+    Args:
+        columns: 已经完成标识符引用或表达式渲染的内容
+
+    Returns:
+        使用逗号和空格分隔的 SQL 片段
+    """
     return ", ".join(columns)
 
 
 def index_options(rows: Sequence[Mapping[str, Any]], no_backslash: bool) -> str:
+    """渲染索引类型、可见性和注释选项
+
+    Args:
+        rows: 同一索引的元数据序列，索引级属性读取首项
+        no_backslash: 当前会话是否启用 NO_BACKSLASH_ESCAPES
+
+    Returns:
+        带前导空格的选项片段，没有需展示的选项时为空字符串
+    """
     if not rows:
         return ""
     first = rows[0]
@@ -523,6 +727,15 @@ def index_options(rows: Sequence[Mapping[str, Any]], no_backslash: bool) -> str:
 
 
 def default_sql(column: Mapping[str, Any], no_backslash: bool = False) -> str:
+    """按字段类型与元数据标记渲染默认值
+
+    Args:
+        column: 包含 column_default、data_type 和可选 extra 的列元数据
+        no_backslash: 当前会话是否启用 NO_BACKSLASH_ESCAPES
+
+    Returns:
+        可接在 DEFAULT 后的表达式，None 返回空字符串，不区分缺省与显式 DEFAULT NULL
+    """
     value = column["column_default"]
     if value is None:
         return ""
@@ -540,25 +753,58 @@ def default_sql(column: Mapping[str, Any], no_backslash: bool = False) -> str:
 
 
 def column_type(column: Mapping[str, Any]) -> str:
+    """对字段类型进行不改变字面量的紧凑排版
+
+    Args:
+        column: 包含数据库原始 column_type 的列元数据
+
+    Returns:
+        省略非 ZEROFILL 整数显示宽度并整理数值精度空格的类型，枚举字面量保持不变
+    """
     value = str(column["column_type"])
     if "zerofill" not in value.lower():
         value = INTEGER_DISPLAY_WIDTH.sub(lambda match: match.group(1), value)
-    # Spacing only in numeric precision, never inside enum/set string literals.
+    # 仅整理数值精度参数中的空格，保留 enum/set 字符串字面量
     if re.fullmatch(r"(?:decimal|numeric|float|double)\(\d+,\d+\)(?: unsigned)?(?: zerofill)?", value, re.I):
         value = value.replace(",", ", ")
     return value
 
 
 def on_update_sql(extra: str) -> str:
+    """从列额外属性中提取时间戳更新规则
+
+    Args:
+        extra: information_schema.COLUMNS 返回的 EXTRA 文本
+
+    Returns:
+        ON UPDATE CURRENT_TIMESTAMP 片段，没有该规则时为空字符串
+    """
     match = re.search(r"on update CURRENT_TIMESTAMP(?:\(\d*\))?", extra, re.I)
     return match.group(0) if match else ""
 
 
 def ddl_ident(value: str) -> str:
+    """按 MySQL 标识符规则引用名称
+
+    Args:
+        value: 未经 SQL 引用的对象名称
+
+    Returns:
+        必要时使用反引号引用的名称，不进行绑定模板的百分号双写
+    """
     return IDENTIFIER_PREPARER.quote(value)
 
 
 def sql_string(value: str, no_backslash: bool = False) -> str:
+    """按当前会话的反斜杠规则引用字符串
+
+    Args:
+        value: 需要作为 SQL 字符串字面量表示的内容
+        no_backslash: 是否启用 NO_BACKSLASH_ESCAPES，为真时不双写反斜杠
+
+    Returns:
+        带单引号且正确引用内部单引号的 SQL 字面量
+    """
     if not no_backslash:
         value = value.replace("\\", "\\\\")
     return "'" + value.replace("'", "''") + "'"

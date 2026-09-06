@@ -1,4 +1,4 @@
-"""Opt-in tests; create/drop only a randomly named schema on an explicit test server."""
+"""在显式指定的测试实例中检查真实 MySQL 行为"""
 
 import os
 import unittest
@@ -13,19 +13,31 @@ from app.ddl import sql_string
 from app.errors import mysql_error_number
 from app.factory import create_app
 from app.query import query_result
+from tests.helpers import example_config
 
 
 @unittest.skipUnless(os.environ.get("MYSQL_TEST_PORT"), "Set MYSQL_TEST_PORT for a dedicated MySQL test instance.")
 class MySQLIntegrationTest(unittest.TestCase):
+    """在显式指定的测试实例中检查真实 MySQL 行为"""
+
     @classmethod
     def setUpClass(cls):
-        cls.mysql = {
-            "host": os.environ.get("MYSQL_TEST_HOST", "127.0.0.1"),
-            "port": int(os.environ["MYSQL_TEST_PORT"]),
-            "username": os.environ.get("MYSQL_TEST_USER", "root"),
-            "password": os.environ.get("MYSQL_TEST_PASSWORD", ""),
-            "use_ssl": False,
-        }
+        """创建随机命名的隔离 schema 和只读 API 客户端
+
+        Raises:
+            pymysql.Error: 测试实例不可连接或测试账号无法建立所需对象
+        """
+        config = example_config()
+        cls.mysql = config["profiles"]["example-dev"]["mysql"]
+        cls.mysql.update(
+            {
+                "host": os.environ.get("MYSQL_TEST_HOST", "127.0.0.1"),
+                "port": int(os.environ["MYSQL_TEST_PORT"]),
+                "username": os.environ.get("MYSQL_TEST_USER", "root"),
+                "password": os.environ.get("MYSQL_TEST_PASSWORD", ""),
+                "use_ssl": False,
+            }
+        )
         cls.admin = pymysql.connect(
             host=cls.mysql["host"],
             port=cls.mysql["port"],
@@ -42,7 +54,7 @@ class MySQLIntegrationTest(unittest.TestCase):
             cls.version = tuple(int(part) for part in cursor.fetchone()[0].split("-")[0].split("."))
             cursor.execute(f"CREATE DATABASE {cls.schema} CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci")
         cls.addClassCleanup(cls.drop_schema)
-        cls.source = "line1\nline2\t\r\\n :name 100% 中文"
+        cls.source = "line1\nline2\t\r\\n :name 100% 中文 😀𠀀"
         with cls.admin.cursor() as cursor:
             cursor.execute("SET SESSION sql_mode = 'NO_ENGINE_SUBSTITUTION'")
             cursor.execute(f"""
@@ -81,25 +93,35 @@ class MySQLIntegrationTest(unittest.TestCase):
                 cursor.execute(f"ALTER TABLE {cls.schema}.sample ADD CONSTRAINT positive CHECK (`a-b` > 0)")
                 cursor.execute(f"CREATE INDEX label_desc ON {cls.schema}.sample (label DESC) INVISIBLE")
                 cursor.execute(f"CREATE INDEX label_expression ON {cls.schema}.sample ((lower(label)))")
-        cls.app = create_app(
-            settings_from_dict(
-                {
-                    "profiles": {
-                        "test": {"description": "Isolated integration test", "enabled": True, "mysql": cls.mysql}
-                    },
-                }
-            )
-        )
+        config["profiles"] = {
+            "test": {"description": "Isolated integration test", "enabled": True, "mysql": cls.mysql},
+        }
+        cls.app = create_app(settings_from_dict(config))
         cls.client = TestClient(cls.app)
         cls.client.__enter__()
         cls.addClassCleanup(cls.client.__exit__, None, None, None)
 
     @classmethod
     def drop_schema(cls):
+        """清理当前测试类创建的隔离 schema
+
+        Raises:
+            pymysql.Error: 测试实例拒绝清理或连接失效
+        """
         with cls.admin.cursor() as cursor:
             cursor.execute(f"DROP DATABASE {cls.schema}")
 
     def query(self, sql, suffix="?format=json", operation="query"):
+        """向隔离环境发送原始 SQL
+
+        Args:
+            sql: 提交给测试 API 的 SQL 字符串
+            suffix: 附加到端点的查询参数，省略时选择 JSON
+            operation: query、count 或 explain 端点名称
+
+        Returns:
+            测试客户端收到的 HTTP 响应
+        """
         return self.client.post(
             f"/profiles/test/{operation}{suffix}",
             content=sql.encode("utf-8"),
@@ -107,6 +129,7 @@ class MySQLIntegrationTest(unittest.TestCase):
         )
 
     def test_original_sql_and_text_values_round_trip(self):
+        """SQL 特殊字符和数据库文本经两种格式往返后保持原意"""
         response = self.query("SELECT ':name' AS a, '%(x)s 100%' AS b, REPLACE('create;', ';', '#') AS c")
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["rows"], [[":name", "%(x)s 100%", "create#"]])
@@ -115,6 +138,7 @@ class MySQLIntegrationTest(unittest.TestCase):
         self.assertEqual(self.query(sql, suffix="").text, "body\n" + self.source)
 
     def test_paging_and_exact_truncation_boundary(self):
+        """分页在实际额外行存在时才标记截断"""
         sql = f"SELECT `a-b` AS id FROM {self.schema}.sample ORDER BY `a-b`"
         small = self.query(sql, "?format=json&limit=2")
         self.assertEqual(small.json(), {"columns": ["id"], "rows": [[1], [2]], "truncated": True})
@@ -127,6 +151,7 @@ class MySQLIntegrationTest(unittest.TestCase):
         self.assertEqual(self.query(sql, "?format=json&offset=5").json()["rows"], [])
 
     def test_null_empty_string_and_scalar_types(self):
+        """真实驱动区分空值并保留零日期、精确小数和负时长"""
         result = self.query(f"SELECT body FROM {self.schema}.sample ORDER BY `a-b`").json()
         self.assertEqual(result["rows"], [[self.source], [None], [""]])
         result = self.query(
@@ -145,6 +170,7 @@ class MySQLIntegrationTest(unittest.TestCase):
         )
 
     def test_show_create_procedure_event_and_view(self):
+        """过程、事件和视图源码与 MySQL 原生返回一致"""
         for kind, name, column in [
             ("PROCEDURE", "p", "Create Procedure"),
             ("EVENT", "e", "Create Event"),
@@ -165,6 +191,7 @@ class MySQLIntegrationTest(unittest.TestCase):
         self.assertEqual(self.query("SHOW VARIABLES", "?offset=1").status_code, 422)
 
     def test_ddl_metadata_uses_supported_version_fields(self):
+        """DDL 元数据按实际服务端版本正确查询和展示"""
         response = self.client.get("/profiles/test/ddl", params={"schema": self.schema, "table": "sample,sample"})
         self.assertEqual(response.status_code, 200, response.text)
         ddl = response.text
@@ -191,6 +218,7 @@ class MySQLIntegrationTest(unittest.TestCase):
         self.assertTrue(response.json()["truncated"])
 
     def test_read_only_session_is_enforced_by_mysql_and_pool_reuse(self):
+        """MySQL 拒绝只读会话写入且连接复用不解除限制"""
         for _ in range(2):
             with self.app.state.databases.session("test") as session:
                 with self.assertRaises(SQLAlchemyError) as error:
@@ -200,6 +228,7 @@ class MySQLIntegrationTest(unittest.TestCase):
         self.assertEqual(response.json()["rows"], [[15000]])
 
     def test_sql_modes_preserve_literal_values(self):
+        """不同 SQL mode 下的字符串引用仍返回相同字段值"""
         value = "quote' slash\\ newline\n 中文"
         with self.app.state.databases.session("test") as session:
             connection = session.connection()
@@ -217,12 +246,13 @@ class MySQLIntegrationTest(unittest.TestCase):
 
     @unittest.skipUnless(os.environ.get("MYSQL_TEST_SSL_CA"), "Set MYSQL_TEST_SSL_CA to verify live TLS.")
     def test_tls_connection_uses_trusted_certificate(self):
+        """可信 CA 配置能够建立实际加密连接"""
         mysql = {**self.mysql, "use_ssl": True, "ssl_ca": os.environ["MYSQL_TEST_SSL_CA"]}
-        settings = settings_from_dict(
-            {
-                "profiles": {"test": {"enabled": True, "description": "TLS integration test", "mysql": mysql}},
-            }
-        )
+        config = example_config()
+        config["profiles"] = {
+            "test": {"enabled": True, "description": "TLS integration test", "mysql": mysql},
+        }
+        settings = settings_from_dict(config)
         with TestClient(create_app(settings)) as client:
             response = client.post(
                 "/profiles/test/query?format=json",
@@ -233,6 +263,7 @@ class MySQLIntegrationTest(unittest.TestCase):
             self.assertTrue(response.json()["rows"][0][1])
 
     def test_native_errors_count_explain_and_cte_version(self):
+        """原生错误、计数和执行计划符合各 MySQL 版本行为"""
         for sql, expected, phrase in [
             ("SELECT missing_column", 400, "1054"),
             (f"SELECT * FROM {self.schema}.missing_table", 404, "1146"),

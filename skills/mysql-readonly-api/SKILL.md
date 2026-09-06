@@ -19,13 +19,15 @@ Use qualified `schema.table` names; there is no default schema. Choose only the 
 | `GET /profiles/<profile>/schemas` | Business schemas |
 | `GET /profiles/<profile>/tables?schema=<schema>&keyword=<keyword>` | Tables/views; keyword is optional |
 | `GET /profiles/<profile>/ddl?schema=<schema>&table=<table>` | Compact Table/View DDL; repeat `table` for multiple objects |
-| `POST /profiles/<profile>/query?limit=500&offset=0` | SQL body: SELECT, WITH, or SHOW |
+| `POST /profiles/<profile>/query?limit=<rows>&offset=<offset>` | SQL body: SELECT, WITH, or SHOW |
 | `POST /profiles/<profile>/count` | SQL body: SELECT or WITH |
 | `POST /profiles/<profile>/explain` | SQL body: SELECT or WITH |
 
 Send SQL as UTF-8 `text/plain`, not JSON or a JSON-encoded string. URL-encode query parameters.
 The query parameter `format=text|json` applies to every endpoint except `/ddl`.
-`limit` also applies to schemas, tables and explain; default 500, maximum 5000 unless the service config changes them.
+`limit` also applies to schemas, tables and explain. Omit it to use the service's configured `query.limit`;
+pass a smaller positive number to reduce the result. This same configured value is the hard cap;
+requests exceeding it return 422 with the allowed value. Use small samples when the task does not require all rows.
 
 `/ddl` is a compact structural summary, not a backup/migration script. For exact definitions, use `/query` with
 `SHOW CREATE TABLE schema.table`, `SHOW CREATE VIEW schema.view`, `SHOW CREATE PROCEDURE schema.proc`,

@@ -14,36 +14,48 @@ Copy-Item config.example.yaml config.yaml
 uv run main.py
 ```
 
-也可用 `uv run uvicorn app.factory:create_app --factory --host 127.0.0.1 --port 8765`。
-本地 `config.yaml` 不提交。示例配置只列常用项，省略的值使用以下默认值：
+本地 `config.yaml` 不提交。`config.example.yaml` 列出完整配置，所有配置节与字段都必须显式填写。
+缺项、未知字段、类型或范围错误均在启动时报告完整路径，不使用代码内置值补齐配置。
+可为空的字段也需明确填写，例如 `ssl_ca: null`；`profiles: {}` 表示显式不配置任何环境。
+禁用 profile 的字段也需完整填写。
 
-| 配置 | 默认值 / 说明 |
+| 配置 | 含义与约束 |
 |---|---|
-| `app.name` / `app.sql_log` | `mysql-readonly-api` / `false`；开启 SQL 日志会记录 SQL 和绑定参数 |
-| `server.host` / `port` / `reload` | `127.0.0.1` / `8765` / `false` |
-| `query.default_limit` / `max_limit` | `500` / `5000`，默认值不能超过上限 |
-| `query.timeout_ms` | `15000`，设置 MySQL `max_execution_time` |
-| `profiles.<name>.enabled` | `false`；名称用小写字母、数字、`-`、`_`，首字符为字母或数字 |
-| `profiles.<name>.description` | 必填，用于选择环境 |
-| `mysql.host` / `username` / `password` | 每个 profile 必填；密码须为字符串，可为空 |
-| `mysql.port` | `3306` |
-| `mysql.character_encoding` / `use_unicode` | `utf8mb4` / `true` |
-| `mysql.use_ssl` / `ssl_ca` | `true` / `null`；启用 TLS 并校验证书、主机名，可指定 CA 文件 |
-| `mysql.server_timezone` | `+08:00`；空字符串保留服务端时区 |
-| `mysql.connect_timeout` / `read_timeout` / `write_timeout` | `10` / `30` / `30` 秒 |
-| `mysql.pool.size` / `max_overflow` | `5` / `10` |
-| `mysql.pool.timeout` / `recycle` / `pre_ping` | `30` 秒 / `3600` 秒 / `true` |
+| `app.name` / `app.sql_log` | 应用名称 / 是否记录 SQL 和绑定参数 |
+| `server.host` / `port` / `reload` | REST 监听地址 / 端口 / 是否启用开发重载 |
+| `query.limit` | 请求未传 limit 时的返回行数，也是单次硬上限，必须为正整数 |
+| `query.timeout_ms` | MySQL `max_execution_time`，正整数，单位为毫秒 |
+| `profiles.<name>.enabled` | 是否启用环境；名称用小写字母、数字、`-`、`_`，首字符为字母或数字 |
+| `profiles.<name>.description` | 非空环境说明，帮助调用方选择数据源 |
+| `mysql.host` / `username` / `password` | MySQL 地址 / 账号 / 密码，密码须为字符串，可为空 |
+| `mysql.port` | MySQL 端口，与 REST 端口均限定在 1–65535 |
+| `mysql.character_encoding` / `use_unicode` | 连接字符集 / 是否将字符字段解码为字符串 |
+| `mysql.use_ssl` / `ssl_ca` | 是否要求 TLS 并校验主机名 / CA 文件；显式 null 使用系统信任库 |
+| `mysql.server_timezone` | 会话时区；显式空字符串保留服务端时区 |
+| `mysql.connect_timeout` | 建立数据库连接的超时，正整数，单位为秒 |
+| `mysql.io_timeout` | 网络发送 SQL 和接收结果的超时，同时传给驱动的读写超时参数，正整数，单位为秒 |
+| `mysql.pool.size` / `max_overflow` | 常驻连接上限 / 允许额外创建的连接数，前者为正数，后者可为零 |
+| `mysql.pool.timeout` / `recycle` / `pre_ping` | 等待可用连接的超时秒数 / 连接存续多久后在再次取用时回收，单位为秒 / 是否检查连接存活 |
+
+示例使用 `utf8mb4` 连接字符集，MySQL 5.7 和 8.0 均支持。
+相比 MySQL 的三字节 `utf8`，它能完整传输 emoji 等补充字符，普通中文和英文的编码长度相同；
+设置连接字符集不会修改已有表的字符集或数据。
+`io_timeout` 控制网络发送与接收，与数据库写入权限无关，也不是整个请求的总时限。
+
+例如显式配置 `query.limit: 500`：请求不传 `limit` 时最多返回 500 行，
+传 `limit=20` 时最多返回 20 行，传 `limit=501` 时返回 422，不会悄悄改小请求值。
+该限制控制结果规模和上下文占用，不保证固定的 token 数；需要更多结果时按需分页。
 
 布尔值使用 YAML `true/false`，数字使用整数。每个启用的 profile 有独立的惰性连接池。
 URL 中必须指定 profile，SQL 中使用 `schema.table`，没有默认 schema，也不能跨 profile 联表。
 未知或禁用的 profile 返回 404。
 
-服务默认仅监听本机，**不提供 HTTP 身份认证**。数据库账号应仅具有任务需要的读取权限。
+示例配置仅监听本机，**不提供 HTTP 身份认证**。数据库账号应仅具有任务需要的读取权限。
 每个新物理连接设置 `SET SESSION TRANSACTION READ ONLY`，并在请求结束时回滚事务。
 SQL 词法检查和只读会话用于减少误操作；它们不是任意 SQL 的完整安全沙箱，也不取代账号权限。
 例如 MySQL 允许只读事务修改临时表，存储函数的能力也取决于数据库端定义和授权。
 
-TLS 开启时不再允许静默降级到明文；自签名证书需配置 CA，主机名必须匹配证书。
+TLS 开启时要求连接实际加密；自签名证书需配置 CA，主机名必须匹配证书。
 通过 SSH 转发时仍需考虑证书主机名；只有明确使用非 TLS 连接时才设置 `use_ssl: false`。
 SSH 端口是 MySQL 端口，与 REST 监听端口无关。
 
@@ -170,7 +182,7 @@ SQL 错误保留 MySQL errno 和驱动消息，不附加 SQLAlchemy 的 SQL/参�
 | 400 | SQL 校验、语法、重复列名等，可根据提示修改 SQL |
 | 403 | 权限不足或违反只读事务 |
 | 404 | 未知/禁用 profile，或对象不存在/不可见 |
-| 422 | 参数错误，指出具体参数；包括 SHOW offset、旧 raw 参数 |
+| 422 | 参数错误，指出具体参数；包括 SHOW 的非零 offset 和超出配置上限的 limit |
 | 503 | 连接、认证、TLS、连接池问题 |
 | 504 | 查询超时或被中断 |
 | 500 | 内部异常 |
@@ -179,14 +191,10 @@ SQL 错误保留 MySQL errno 和驱动消息，不附加 SQLAlchemy 的 SQL/参�
 Skill 负责调用方法；本 README 负责服务配置与实现边界。
 已知 profile 可以直接使用，无需重复发现；count 和元数据遍历都按任务需要调用。
 
-升级旧配置/调用方：删除 `zero_datetime_behavior`；`raw` 改为 `format=json` 或 `format=text`；
-删除 health 探活流程；外部 uvicorn 启动命令改用 factory；核对真实 TLS 配置。
-不会自动改动未提交的本地配置。
-
 ```powershell
 uv run ruff check .
 uv run ruff format --check .
-uv run python -m unittest discover -s tests -v
+uv run python -X utf8 -m unittest discover -s tests -v
 ```
 
 集成测试默认跳过。指定**专用测试实例**的 `MYSQL_TEST_PORT` 后运行同一命令；

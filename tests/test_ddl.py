@@ -1,3 +1,5 @@
+"""覆盖 DDL 字面量、对象引用与版本元数据差异"""
+
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
@@ -21,7 +23,10 @@ from app.table_params import parse_table_names
 
 
 class DdlTest(unittest.TestCase):
+    """覆盖 DDL 字面量、对象引用与版本元数据差异"""
+
     def test_string_defaults_are_not_guessed_as_sql_expressions(self):
+        """字符串默认值保持字符串含义且引用遵循 SQL mode"""
         for value in ["NULL", "CURRENT_TIMESTAMP", "UUID()", "NOW()", "a'b\\c"]:
             column = {"column_default": value, "data_type": "varchar", "extra": ""}
             self.assertEqual(default_sql(column), sql_string(value))
@@ -39,6 +44,7 @@ class DdlTest(unittest.TestCase):
         )
 
     def test_identifier_and_type_formatting_preserves_literals(self):
+        """标识符正确引用且类型排版不改写枚举值"""
         for value in ["enum('x,1','int(11)')", "set('a,2')", "int(5) unsigned zerofill"]:
             self.assertEqual(column_type({"column_type": value}), value)
         self.assertEqual(column_type({"column_type": "decimal(10,2)"}), "decimal(10, 2)")
@@ -46,6 +52,7 @@ class DdlTest(unittest.TestCase):
         self.assertEqual(ddl_ident("a`b:100%"), "`a``b:100%`")
 
     def test_mysql_57_never_requests_mysql_8_catalog_fields(self):
+        """MySQL 5.7 的元数据查询不引用 8.x 专属字段"""
         session = Mock(info={"mysql_version": (5, 7, 44)})
         with patch("app.ddl.fetch_rows", return_value=[]) as fetch:
             table_indexes(session, "app", ["table"])
@@ -59,6 +66,7 @@ class DdlTest(unittest.TestCase):
             fetch.assert_not_called()
 
     def test_view_fallback_is_only_for_permission_errors(self):
+        """视图源码只在权限不足时降级"""
         session = MagicMock()
         execute = session.connection.return_value.exec_driver_sql
         for number in [1142, 1064, 2013]:
@@ -71,6 +79,7 @@ class DdlTest(unittest.TestCase):
                     show_create_view(session, "app", "view")
 
     def test_table_parameters_keep_quoted_names_and_deduplicate(self):
+        """对象参数保留引用内的字符并按请求顺序去重"""
         self.assertEqual(
             parse_table_names(["a,b", "a", "`a,b`,`a``b`,` spaced `"]), ["a", "b", "a,b", "a`b", " spaced "]
         )
@@ -79,6 +88,7 @@ class DdlTest(unittest.TestCase):
                 parse_table_names([value])
 
     def test_table_ddl_keeps_primary_not_null_and_foreign_key(self) -> None:
+        """表摘要保留非空主键、外键和表属性"""
         table_meta = {
             "table_comment": "Example",
             "charset": "utf8mb4",
@@ -147,6 +157,7 @@ class DdlTest(unittest.TestCase):
         self.assertIn("collate = utf8mb4_general_ci", ddl)
 
     def test_view_ddl_returns_source_when_visible(self) -> None:
+        """可见视图使用原生源码并补齐分号"""
         ddl = render_view_ddl(
             table="example_view",
             create_sql="CREATE DEFINER=`root`@`%` VIEW `example_view` AS select 1 AS `id`",
@@ -159,6 +170,7 @@ class DdlTest(unittest.TestCase):
         )
 
     def test_view_ddl_marks_missing_source(self) -> None:
+        """不可见视图明确标记源码缺失并展示可见列注释"""
         ddl = render_view_ddl(
             table="example_view",
             create_sql="",

@@ -1,23 +1,40 @@
-# All omitted options use the defaults documented in README.md.
+# 所有字段必须显式填写；可为空的字段也需要写出 null 或空字符串
+app:
+  name: mysql-readonly-api
+  sql_log: false
+
 server:
   host: 127.0.0.1
   port: 8765
+  reload: false
 
 query:
-  default_limit: 500
-  max_limit: 5000
+  # 请求省略 limit 时采用此值，也是请求不能突破的行数上限
+  limit: 500
   timeout_ms: 15000
 
 profiles:
   example-dev:
-    enabled: false # Fill in credentials, then enable.
+    enabled: false # 填写实际连接信息后再启用
     description: Example development database
     mysql:
       host: localhost
       port: 3306
       username: readonly
       password: "replace-me"
+      use_unicode: true
+      # 连接字符集，支持完整 Unicode，兼容 MySQL 5.7 和 8.x
+      character_encoding: utf8mb4
       use_ssl: true
-      # ssl_ca: "C:/certificates/mysql-ca.pem"
-      # For a deliberately unencrypted local connection, set use_ssl: false.
+      # null 表示使用系统信任库，自签名证书需填写可信 CA 文件路径
+      ssl_ca: null
       server_timezone: "+08:00"
+      connect_timeout: 10
+      # 网络发送 SQL 和接收结果的超时秒数，与读写权限无关
+      io_timeout: 30
+      pool:
+        size: 5
+        max_overflow: 10
+        timeout: 30
+        recycle: 3600
+        pre_ping: true

@@ -1,10 +1,22 @@
+"""解析 DDL 请求中的重复参数和带引用的对象名称"""
+
 from collections.abc import Sequence
 
 from fastapi import HTTPException
 
 
 def parse_table_names(table: Sequence[str]) -> list[str]:
-    """Support repeated parameters, comma lists, and backtick-quoted literal names."""
+    """解析并按首次出现顺序去重对象名称
+
+    Args:
+        table: 重复的 table 参数，支持逗号列表及反引号引用，双反引号表示名称内的反引号
+
+    Returns:
+        去重后的名称列表，空白参数被忽略，可返回空列表
+
+    Raises:
+        HTTPException: 反引号未闭合或引用名称后存在无效字符，状态为 422
+    """
     names: list[str] = []
     for item in table:
         i = 0
