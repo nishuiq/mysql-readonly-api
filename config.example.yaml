@@ -1,40 +1,37 @@
-# 所有字段必须显式填写；可为空的字段也需要写出 null 或空字符串
+# 所有字段必须显式填写；布尔值使用 true/false，数值使用整数
 app:
   name: mysql-readonly-api
-  sql_log: false
+  sql_log: false # 开启后记录 SQL 和绑定参数，不记录结果集
 
 server:
-  host: 127.0.0.1
-  port: 8765
-  reload: false
+  host: 127.0.0.1 # REST 监听地址
+  port: 8765 # REST 端口，范围 1–65535
+  reload: false # 开发环境自动重载
 
 query:
-  # 请求省略 limit 时采用此值，也是请求不能突破的行数上限
-  limit: 500
-  timeout_ms: 15000
+  limit: 500 # 正整数，请求省略 limit 时使用此值，也是单次硬上限
+  timeout_ms: 15000 # 正整数，MySQL max_execution_time，单位为毫秒
 
 profiles:
+  # 名称使用小写字母、数字、-、_，首字符为字母或数字
   example-dev:
-    enabled: false # 填写实际连接信息后再启用
-    description: Example development database
+    enabled: false # 填写实际连接信息后再启用；禁用环境也需完整配置
+    description: Example development database # 非空环境说明，供调用方选择
     mysql:
-      host: localhost
-      port: 3306
+      host: localhost # MySQL 主机，启用 TLS 时也用于证书主机名校验
+      port: 3306 # MySQL 端口，范围 1–65535；SSH 转发时填写本地转发端口
       username: readonly
-      password: "replace-me"
-      use_unicode: true
-      # 连接字符集，支持完整 Unicode，兼容 MySQL 5.7 和 8.x
-      character_encoding: utf8mb4
-      use_ssl: true
-      # null 表示使用系统信任库，自签名证书需填写可信 CA 文件路径
-      ssl_ca: null
-      server_timezone: "+08:00"
-      connect_timeout: 10
-      # 网络发送 SQL 和接收结果的超时秒数，与读写权限无关
-      io_timeout: 30
+      password: "replace-me" # 必须为字符串，允许显式填写空字符串
+      use_unicode: true # 将字符字段解码为字符串，关闭时按二进制展示
+      character_encoding: utf8mb4 # 支持完整 Unicode，兼容 MySQL 5.7 和 8.x
+      use_ssl: true # 要求 TLS 加密并校验证书
+      ssl_ca: null # null 使用系统信任库；自签名证书填写可信 CA 路径，仅在 use_ssl 为 true 时可指定路径
+      server_timezone: "+08:00" # 会话时区，显式空字符串保留服务端设置
+      connect_timeout: 10 # 正整数，建立连接的超时秒数
+      io_timeout: 30 # 正整数，网络发送 SQL 和接收结果的超时秒数，与读写权限无关
       pool:
-        size: 5
-        max_overflow: 10
-        timeout: 30
-        recycle: 3600
-        pre_ping: true
+        size: 5 # 正整数，常驻连接数量上限
+        max_overflow: 10 # 允许临时增加的连接数，可为零
+        timeout: 30 # 正整数，连接池用满后等待可用连接的超时秒数
+        recycle: 3600 # 正整数，连接存续多久后在再次取用时回收，单位为秒
+        pre_ping: true # 取用连接时检查存活状态

@@ -2,7 +2,7 @@
 name = "mysql-readonly-api"
 version = "0.1.0"
 description = "A tiny readonly MySQL REST API."
-readme = "README.md"
+readme = { file = "README.adoc", content-type = "text/plain" }
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.115.0",
