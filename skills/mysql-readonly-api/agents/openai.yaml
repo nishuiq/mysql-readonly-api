@@ -1,4 +1,4 @@
 interface:
   display_name: "MySQL Readonly API"
   short_description: "Query multiple readonly MySQL profiles."
-  default_prompt: "Use $mysql-readonly-api to discover the appropriate database profile and inspect or query it safely."
+  default_prompt: "Use $mysql-readonly-api to inspect or query the requested MySQL profile."

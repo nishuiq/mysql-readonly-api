@@ -1,6 +1,6 @@
 = mysql-readonly-api
 
-供 AI skill 调用的轻量 MySQL 只读 REST API。一个服务支持多个 profile，可连接 MySQL 5.7（GA 版本）和 8.x；默认返回紧凑文本，需要准确区分字段边界、NULL 或读取源码时使用 `format=json`。
+供 AI skill 调用的 MySQL 只读 REST API，支持多个 profile 和 MySQL 5.7（GA 版本）、8.x。
 
 == 启动与配置
 
@@ -14,51 +14,63 @@ Copy-Item config.example.yaml config.yaml
 uv run main.py
 ----
 
-完整字段、示例值与字段注释集中在 link:config.example.yaml[config.example.yaml]。所有配置节与字段都必须显式填写，禁用的 profile 也需完整配置；缺项、未知字段、类型或范围错误会在启动时报告完整路径，不使用内置值补齐。可为空的字段也需明确填写，例如 `ssl_ca: null`；`profiles: {}` 表示不配置任何环境。本地 `config.yaml` 不提交。
+完整字段、示例值和短注释见 link:config.example.yaml[config.example.yaml]。所有配置字段必须显式填写，禁用的 profile 也需完整配置；缺项、未知字段、类型或范围错误会在启动时报出字段路径，不自动补值。
 
-每个启用的 profile 有独立的惰性连接池。调用时在 URL 中指定 profile，SQL 中使用 `schema.table`；没有默认 schema，也不能跨 profile 联表。未知或禁用的 profile 返回 404。
+可空字段也需填写，例如 `ssl_ca: null`；`profiles: {}` 表示不配置任何环境。本地 `config.yaml` 不提交。
 
-=== 行数与超时
+每个启用的 profile 有独立的惰性连接池。数据库请求在 URL 中指定 profile，SQL 使用 `schema.table`；没有默认 schema，不能跨 profile 联表。
 
-`query.limit` 同时作为请求省略 `limit` 时的返回行数和单次硬上限。例如配置为 500：不传 `limit` 时最多返回 500 行，传 `limit=20` 时最多返回 20 行，传 `limit=501` 时返回 422。需要更多结果时按需分页；行数限制不保证固定的字节数或 token 数，单个大字段仍会完整返回，可在 SQL 中选择所需列或主动截取字段。
+=== 连接与只读边界
+
+示例仅监听本机，*不提供 HTTP 身份认证*。数据库账号应仅授予任务需要的读取权限。
+
+TLS 开启时要求连接实际加密，并校验证书和主机名。`ssl_ca: null` 使用系统信任库，自签名证书需填写可信 CA 文件路径；非 TLS 连接使用 `use_ssl: false` 和 `ssl_ca: null`。
+
+通过 SSH 转发时，MySQL 端口填写本地转发端口，连接主机名仍需通过证书校验；REST 服务使用独立的监听端口。
+
+新物理连接设置 `SET SESSION TRANSACTION READ ONLY`，请求结束时回滚事务。SQL 检查和只读会话不能替代账号权限：MySQL 只读事务仍允许修改临时表，存储函数的能力也取决于数据库端定义和授权。
+
+=== 超时
 
 [cols="2,3",options="header"]
 |===
 |配置 |作用
 
-|`query.timeout_ms` |MySQL `max_execution_time`，单位为毫秒，主要限制只读 SELECT 的执行时间
+|`query.timeout_ms` |MySQL `max_execution_time`，单位为毫秒，主要限制只读 SELECT
 |`mysql.connect_timeout` |建立数据库连接的超时，单位为秒
-|`mysql.io_timeout` |网络发送 SQL 与接收结果的超时，单位为秒，同时控制驱动的读写超时
+|`mysql.io_timeout` |网络发送 SQL 与接收结果的超时，单位为秒，同时控制驱动读写超时
 |`mysql.pool.timeout` |连接池用满后等待可用连接的超时，单位为秒
 |`mysql.pool.recycle` |连接存续多久后在再次取用时回收，单位为秒，不是查询超时
 |===
 
-`max_execution_time` 不覆盖所有 SHOW、元数据工作或存储程序。`io_timeout` 与数据库写入权限无关，也不是整个请求的总时限；网络超时不保证数据库任务在同一时刻取消。
+`max_execution_time` 不覆盖所有 SHOW、元数据工作或存储程序。`io_timeout` 不是请求总时限，网络超时也不保证数据库任务同时取消。
 
-=== 连接与只读边界
+== 接口
 
-示例使用 `utf8mb4` 连接字符集，MySQL 5.7 和 8.0 均支持。相比 MySQL 的三字节 `utf8`，它能完整传输 emoji 等补充字符，普通中文和英文的编码长度相同；设置连接字符集不会修改已有表的字符集或数据。
-
-TLS 开启时要求连接实际加密，并校验证书和主机名；`ssl_ca: null` 使用系统信任库，自签名证书需填写可信 CA 文件路径。明确使用非 TLS 连接时设置 `use_ssl: false`。通过 SSH 转发时，MySQL 连接端口填写本地转发端口，并确保连接主机名能通过证书校验；REST 服务使用独立的监听端口。
-
-示例配置仅监听本机，*不提供 HTTP 身份认证*。数据库账号应仅具有任务需要的读取权限。每个新物理连接设置 `SET SESSION TRANSACTION READ ONLY`，请求结束时回滚事务；SQL 词法检查和只读会话不能取代账号权限，也不是任意 SQL 的完整安全沙箱。例如 MySQL 允许只读事务修改临时表，存储函数的能力也取决于数据库端定义和授权。
-
-== 接口与结果
-
-[cols="2,3",options="header"]
+[cols="3,3,2",options="header"]
 |===
-|方法与路径 |参数或请求体
+|方法与路径 |参数或请求体 |结果
 
-|`GET /profiles` |已启用的 profile 名称和描述
-|`GET /profiles/<profile>/schemas` |业务 schema，支持 `limit`
-|`GET /profiles/<profile>/tables` |`schema` 必填，`keyword` 按名称或注释匹配，支持 `limit`；返回名称、类型、注释和估计行数
-|`GET /profiles/<profile>/ddl` |`schema`、`table` 必填；`table` 可重复或使用逗号分隔
-|`POST /profiles/<profile>/query` |UTF-8 `text/plain` SQL，支持 `limit` 和 `offset`
-|`POST /profiles/<profile>/count` |UTF-8 `text/plain` SELECT/WITH，统计该 SQL 的结果行数
-|`POST /profiles/<profile>/explain` |UTF-8 `text/plain` SELECT/WITH，返回执行计划，支持 `limit`
+|`GET /profiles` |无 |已启用的 profile 名称和描述
+|`GET /profiles/<profile>/schemas` |`limit` 可选 |账号可见的非系统 schema
+|`GET /profiles/<profile>/tables` |`schema` 必填；`keyword`、`limit` 可选 |表或视图的名称、类型、注释和估计行数
+|`GET /profiles/<profile>/ddl` |`schema`、`table` 必填 |紧凑结构摘要
+|`POST /profiles/<profile>/query` |SELECT/WITH/SHOW；`limit`、`offset` 可选 |查询结果
+|`POST /profiles/<profile>/count` |SELECT/WITH |`count` 列的一行计数
+|`POST /profiles/<profile>/explain` |SELECT/WITH；`limit` 可选 |执行计划
 |===
 
-除 `/ddl` 固定返回文本外，其余接口支持 `format=text` 和 `format=json`，默认使用 `text`。SQL 直接放在请求体中，URL 参数需要进行 URL 编码。
+POST 请求体直接使用 UTF-8 `text/plain` SQL，查询参数需 URL 编码。`/profiles/<profile>/ddl` 固定返回文本，其余接口支持 `format=text`（默认）和 `format=json`。
+
+`keyword` 对表名和注释做包含匹配，保留 `%`、`_` 等 LIKE 通配符。`table` 支持重复参数或逗号分隔；含逗号的名称需用反引号包裹，名称内的反引号写成两个反引号。
+
+=== 行数与偏移
+
+`limit` 必须为正整数，省略时使用配置的 `query.limit`，该值也是单次硬上限。例如配置为 500，`limit=20` 返回至多 20 行，`limit=501` 被拒绝。行数限制不限制单个字段大小，需要控制响应体积时应选择所需列或在 SQL 中截取字段。
+
+`offset` 为非负整数，默认 0；SHOW 只接受 0。分页与截断语义见下文。
+
+=== 调用示例
 
 [source,powershell]
 ----
@@ -68,50 +80,54 @@ $sql = "SELECT id, name FROM example_app.orders ORDER BY id LIMIT 20"
 Invoke-RestMethod -Method Post -Uri "$base/profiles/example-dev/query?limit=20" -ContentType "text/plain; charset=utf-8" -Body ([Text.Encoding]::UTF8.GetBytes($sql))
 ----
 
-=== 文本与 JSON
+== 结果格式
 
-文本用 tab 分隔字段、LF 分隔记录，先显示列名，再显示数据。字符串中的 CR、LF、tab、反斜杠保持原值，零日期也不转换成 NULL。SQL NULL 与字符串 `"NULL"` 均显示为 `NULL`，字段自身可能包含换行或 tab，因此文本适合阅读，需要准确解析字段边界时使用 JSON。
+常规浏览和查询优先省略 `format`，使用默认文本。需要程序化处理行列、提取源码原文或区分 SQL NULL 与字符串 `"NULL"` 时使用 `format=json`。
 
-存在更多结果时，文本在表头前增加一行 `[truncated]`，不插入空行，不附带分页参数：
+文本先显示列名，再以 tab 分隔字段、LF 分隔记录；字段内的 CR、LF、tab 和反斜杠保持原值。SQL NULL 与字符串 `"NULL"` 都显示为 `NULL`，因此不能仅按 tab 和换行可靠还原所有字段。
+
+结果截断时，文本在表头前增加独立的 `[truncated]` 行，不插入空行：
 
 [listing]
 ----
 [truncated]
-id	name
+id	body
 1	Alice
-2	Bob
+2	NULL
 ----
 
-JSON 只写一次列名，用二维数组保存数据行，原生区分 `null`、字符串和字段边界：
+对应的 JSON 用二维数组表示数据行，并显式标记截断：
 
 [source,json]
 ----
-{"columns":["id","body"],"rows":[[1,"line1\nline2"],[2,null]],"truncated":false}
+{"columns":["id","body"],"rows":[[1,"Alice"],[2,null]],"truncated":true}
 ----
 
-JSON 的 `\n` 是标准编码，解码后恢复实际换行；数据库中的字面量反斜杠+n 则编码为 `\\n`。使用标准 JSON 解码，不手动替换转义序列。两种格式都支持任意行列数；空结果返回 200，文本只有表头，JSON 为 `rows:[]`；SQL NULL 也返回 200。
+空结果返回 200，文本只有表头，JSON 为 `rows:[]`。JSON 按标准解码即可，不手工替换转义序列。
 
 [cols="2,2,3",options="header"]
 |===
 |数据类型 |文本 |JSON
 
 |字符串、整数、浮点数 |驱动值的文本表示 |字符串、number
-|DECIMAL |保留精度和小数位 |字符串，避免转 float 丢失精度
+|DECIMAL |保留精度和小数位 |字符串
 |DATE / DATETIME / TIMESTAMP |日期时间文本 |同样的字符串；TIMESTAMP 按会话时区返回
 |TIME |`[-]HH:MM:SS[.ffffff]`，可超过 24 小时 |同样的字符串
-|二进制（包括 BIT） |`0x...` 十六进制 |`{"hex":"..."}`
+|二进制（包括 BIT） |`0x...` |`{"hex":"..."}`
 |SQL NULL |`NULL` |`null`
 |===
 
-JSON 保留值与行列边界，不提供完整的 MySQL 类型信息：日期和 DECIMAL 仍为字符串，MySQL JSON 字段也保留驱动返回的字符串，需要时再解码。使用 JavaScript 处理大整数时需注意 number 精度，可在 SQL 中 CAST 为 CHAR。`use_unicode: false` 会使字符字段按驱动返回的 bytes 使用二进制约定。
+JSON 保留字段边界，但不提供完整 MySQL 类型信息；MySQL JSON 字段仍为字符串，需要时再解码。JavaScript 大整数精度需要由调用方处理，例如在 SQL 中 CAST 为 CHAR。`use_unicode: false` 使字符字段按 bytes 使用二进制约定。
 
-== 查询与分页
+== SQL 与分页
 
-`/query` 接受单条 SELECT/WITH/SHOW，可带普通注释和末尾分号，允许字符串里的关键字、分号及 `REPLACE()`，支持读取 `@@` 系统变量。拒绝写操作、CALL/SET、用户变量、锁定读、文件/等待/锁函数、可执行注释和优化器 hint。词法边界遵循连接的 `sql_mode`，不为通过校验而改写用户 SQL；具体语法由 MySQL 决定，5.7 不支持 WITH/CTE。
+每次只接受一条只读语句，可带普通注释和末尾分号，允许 `@@` 系统变量读取。拒绝写操作、CALL/SET、用户变量、锁定读、文件/等待/锁函数、可执行注释和优化器 hint。
+
+词法检查遵循连接的 `sql_mode`，字符串中的关键字和分号不参与拦截，`INSERT()`、`REPLACE()` 字符串函数可用。具体语法由 MySQL 判断，5.7 不支持 WITH/CTE。
 
 === SELECT/WITH
 
-API 对提交的 SQL 使用外层分页，只返回前 `limit` 行，第 `limit + 1` 行用于判断截断，不预先 COUNT，也不会先取回全部 SELECT 结果：
+API 使用外层 LIMIT/OFFSET 分页，多取一行判断截断：
 
 [source,sql]
 ----
@@ -122,58 +138,54 @@ FROM (
 LIMIT <limit + 1> OFFSET <offset>
 ----
 
-分页作用于原 SQL 的结果，内层 LIMIT 保持有效；同名结果列会触发 MySQL 派生表限制，此时需要为结果列设置不同别名。需要总数时再调用 `count`，它统计提交的 SQL 本身产生的行数，其中的 LIMIT 仍然生效。
+投影列名必须唯一，重名时需设置不同别名。原 SQL 的 LIMIT 仍然生效，截断标志不会越过它探测底层表；返回 `truncated:false` 不代表底层表已读完。
 
-外层派生表不能普遍保证保留内层 ORDER BY 的顺序。要求严格排序时，在自己的 SQL 中使用唯一稳定的 ORDER BY，并写好 LIMIT/OFFSET 或基于键的翻页条件；API offset 保持 0，API limit 至少等于 SQL 页大小。
+要确定每页的数据，在 SQL 中使用唯一稳定的 ORDER BY 和 LIMIT，并用 OFFSET 或基于键的条件翻页；API offset 保持 0，API limit 至少等于 SQL 页大小。
 
-截断标志只反映**提交的 SQL 结果**，不会越过 SQL 自己的 LIMIT 探测底层表。多次请求不共享快照，数据变化时 offset 分页可能重复或遗漏；常规浏览可使用 API limit/offset。
+API 不额外保证返回行的顺序，展示顺序有严格要求时需对返回页按相同规则排序。MySQL 对内层排序的传播条件见 https://dev.mysql.com/doc/refman/8.0/en/derived-table-optimization.html[派生表优化文档]。
+
+多次请求不共享快照，数据变化时 offset 分页可能重复或遗漏。
+
+`count` 统计提交的 SQL 结果，包含内层 LIMIT 的影响，也要求结果列名唯一。仅在需要总数时调用，计数可能昂贵；API 分页不会预先 COUNT。
 
 === SHOW 与元数据
 
-SHOW 直接执行，最多返回 `limit` 行并判断截断，不套 SELECT，也不向原句追加 LIMIT。API offset 非 0 时返回 422；SHOW 自带的语法由 MySQL 处理。
-
-SHOW 使用驱动缓冲结果，返回行数受限不意味着服务端只产生或驱动只接收这些行。大量、可分页的元数据应查询 `information_schema`；schemas/tables 的结果截断时也可缩小筛选范围或改用这种方式。
+SHOW 直接执行，返回行数受 `limit` 限制，但驱动仍缓冲原语句的完整结果。大量、可分页的元数据应查询 `information_schema`；schemas/tables 截断时也可缩小筛选范围或改用此方式。
 
 == DDL 与原生定义
 
-`/ddl` 返回紧凑对齐的结构摘要，展示字段、默认值、生成列、主键/索引、外键和表属性。8.x 按版本补充表达式索引、索引可见性和实际存储的 CHECK 约束，5.7 不查询这些专属字段。含逗号的对象名需要用反引号包裹后作为 `table` 参数传入。
+`/profiles/<profile>/ddl` 展示字段、默认值、生成列、主键/索引、外键和表属性。8.x 按版本补充表达式索引、索引可见性和实际存储的 CHECK 约束，5.7 不查询这些专属字段。
 
-摘要不用于备份或迁移：普通整数显示宽度会省略，ZEROFILL 保留；不区分显式 DEFAULT NULL 与未指定默认值；不完整重建分区、表空间和全部引擎选项，存在额外表选项时给出简短提示。DDL 字符串引用遵循当前会话的 `sql_mode`。
+摘要不适合备份或迁移：省略普通整数显示宽度但保留 ZEROFILL，不区分显式 DEFAULT NULL 与未指定默认值，也不完整重建分区、表空间和全部引擎选项。字符串引用遵循会话 `sql_mode`。
 
-需要完整原生定义时，通过 `/query` 执行 `SHOW CREATE TABLE/VIEW/PROCEDURE/FUNCTION/EVENT`，多行源码使用 JSON：
+完整原生定义通过 `/profiles/<profile>/query` 执行 `SHOW CREATE TABLE schema.name` 获取，其他对象使用 VIEW、PROCEDURE、FUNCTION 或 EVENT 替换 TABLE。
 
-[source,powershell]
-----
-$base = "http://127.0.0.1:8765"
-$sql = "SHOW CREATE PROCEDURE example_app.example"
-$result = Invoke-RestMethod -Method Post -Uri "$base/profiles/example-dev/query?format=json" -ContentType "text/plain; charset=utf-8" -Body ([Text.Encoding]::UTF8.GetBytes($sql))
-$result.rows
-----
+视图源码可见时，`/profiles/<profile>/ddl` 使用原生 SHOW CREATE VIEW；仅权限不足时返回 `missing source code`，其他错误正常上报。NULL 过程或函数源码也表示当前账号不可见，不能当成空定义。
 
-View 源码可见时，`/ddl` 直接使用原生 SHOW CREATE VIEW；仅权限不足时返回 `missing source code` 占位，其他数据库错误正常上报。NULL 源码表示当前账号不可见，不能当成空定义。
-
-元数据可见性取决于账号授权。查询通常需要 SELECT，视图源码需要 SHOW VIEW；过程、函数和事件源码按 MySQL 版本与账号身份处理。5.7 没有 SHOW_ROUTINE，8.0.20+ 才提供此权限；不建议为了读取源码给 AI 账号授予宽泛的管理或写入权限。
+查询通常需要 SELECT，视图源码需要 SHOW VIEW；过程、函数和事件源码按版本与账号身份决定可见性。5.7 没有 SHOW_ROUTINE，8.0.20+ 才提供此权限；不建议为读取源码授予宽泛的管理或写入权限。
 
 == 错误处理
 
-错误始终是纯文本，即使请求 `format=json`；先检查 HTTP 状态再解析 JSON。SQL 错误保留 MySQL errno 和驱动消息，不附加 SQLAlchemy 的 SQL/参数堆栈；连接错误隐藏账号、地址等细节，服务器日志默认也不打印完整 SQL 异常。
+错误始终为纯文本，即使请求 `format=json`；先检查 HTTP 状态再解析 JSON。依据响应中的参数位置、MySQL errno 或消息定位问题，不盲目重试语法或权限错误。
 
 [cols="1,4",options="header"]
 |===
 |HTTP |含义
 
-|400 |SQL 校验、语法、重复列名等，可根据提示修改 SQL
+|400 |SQL 校验、语法、重复列名或 UTF-8 编码错误
 |403 |权限不足或违反只读事务
 |404 |未知或禁用的 profile，或对象不存在、不可见
-|422 |参数错误，包括 SHOW 的非零 offset 和超出配置上限的 limit
+|422 |参数错误，包括超出配置上限的 limit 和 SHOW 的非零 offset
 |503 |连接、认证、TLS 或连接池问题
 |504 |查询超时或被中断
 |500 |内部异常
 |===
 
+SQL 错误保留 MySQL errno 和驱动消息，不附加 SQLAlchemy 的 SQL/参数堆栈；连接错误隐藏账号、地址等细节。异常日志只记录错误类型或状态和错误号；开启 `app.sql_log` 则另行记录 SQL 与绑定参数。
+
 == Skill 使用
 
-将 link:skills/mysql-readonly-api/SKILL.md[skills/mysql-readonly-api] 所在目录复制到本地 skills 目录即可使用，通常为 `~/.codex/skills`。Skill 提供调用方法和关键边界，本 README 说明服务配置与接口契约。已知 profile 可以直接使用；count 和元数据查询按任务需要调用。
+将 link:skills/mysql-readonly-api/SKILL.md[skills/mysql-readonly-api] 整个目录复制到本地 skills 目录，通常为 `~/.codex/skills`。Skill 自包含调用方法与关键边界；配置、完整接口契约和排错表集中在本 README 与配置示例。
 
 == 开发与验证
 
@@ -186,9 +198,11 @@ uv run python -X utf8 -m unittest discover -s tests -v
 
 集成测试默认跳过。指定**专用测试实例**的 `MYSQL_TEST_PORT` 后运行同一命令；可另设 `MYSQL_TEST_HOST`（默认 127.0.0.1）、`MYSQL_TEST_USER`（root）和 `MYSQL_TEST_PASSWORD`（空）。
 
-测试使用无 TLS 本地连接，在随机命名的 `readonly_api_test_*` schema 内创建表、视图、过程和事件，测试后清理；账号需有这些操作权限。测试不会读取 `config.yaml` 或使用业务 profile。分别在 5.7 和 8.x 执行可覆盖真实驱动与版本差异；实例配置了可信 TLS 证书时，可另设 `MYSQL_TEST_SSL_CA` 指向 CA 文件，启用真实 TLS 验证。
+测试默认使用无 TLS 本地连接，在随机命名的 `readonly_api_test_*` schema 内创建表、视图和存储对象，结束后清理；账号需有相应权限。测试不读取 `config.yaml` 或业务 profile。
 
-临时测试环境、下载包、日志和生成文件统一放在项目 `temp/` 下，该目录已被 Git 忽略。MySQL ZIP 包、解压程序、测试数据和证书可集中放在 `temp/mysql-integration/`，测试结束后关闭实例。
+分别在 5.7 和 8.x 运行可覆盖版本差异。实例配置了可信 TLS 证书时，设置 `MYSQL_TEST_SSL_CA` 为 CA 文件路径可额外运行 TLS 连接验证。
+
+临时环境、下载包、日志和生成文件放在已忽略的 `temp/` 下；MySQL 测试资源可集中在 `temp/mysql-integration/`，测试结束后关闭实例。
 
 == License
 
