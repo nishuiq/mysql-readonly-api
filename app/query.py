@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from sqlmodel import Session
 
 from app.executor import QueryResult, run_query
-from app.sql_guard import clean_select_sql, clean_sql, count_sql, explain_sql, first_word, paged_sql
+from app.sql_guard import clean_select_sql, count_sql, explain_sql, paged_sql, validate_sql
 
 
 def query_result(session: Session, sql: str, limit: int, offset: int) -> QueryResult:
@@ -23,13 +23,12 @@ def query_result(session: Session, sql: str, limit: int, offset: int) -> QueryRe
         HTTPException: SQL 不符合只读规则或 SHOW 使用非零偏移量
         SQLAlchemyError: 数据库执行失败
     """
-    mode = session.info["sql_mode"]
-    readonly_sql = clean_sql(sql, mode)
-    if first_word(readonly_sql, mode) == "show":
+    validated = validate_sql(sql, session.info["sql_mode"])
+    if validated.statement == "show":
         if offset:
             raise HTTPException(422, "SHOW does not support API offset; use information_schema SELECT for paging.")
-        return run_query(session, readonly_sql, limit=limit)
-    return run_query(session, paged_sql(readonly_sql, limit, offset), limit=limit)
+        return run_query(session, validated.sql, limit=limit)
+    return run_query(session, paged_sql(validated.sql, limit, offset), limit=limit)
 
 
 def count_result(session: Session, sql: str) -> QueryResult:

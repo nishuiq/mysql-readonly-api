@@ -28,6 +28,34 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(settings.server.port, 8888)
         self.assertNotIn("private-password", repr(settings))
 
+    def test_profile_snapshots_reject_in_place_changes(self):
+        """完整配置与启用环境快照均拒绝增删和替换 profile"""
+        config = example_config()
+        config["profiles"]["example-dev"]["enabled"] = True
+        settings = settings_from_dict(config)
+        original = settings.profiles["example-dev"]
+        for name, profiles in [("all", settings.profiles), ("enabled", settings.enabled_profiles)]:
+            with self.subTest(snapshot=name):
+                with self.assertRaises(TypeError):
+                    profiles["extra"] = original
+                with self.assertRaises(TypeError):
+                    profiles["example-dev"] = original
+                with self.assertRaises(TypeError):
+                    del profiles["example-dev"]
+                self.assertEqual(list(profiles), ["example-dev"])
+                self.assertIs(profiles["example-dev"], original)
+
+    def test_profile_snapshot_is_independent_of_input(self):
+        """配置快照保留输入顺序且不受输入字典后续修改影响"""
+        config = example_config()
+        config["profiles"]["example-dev"]["enabled"] = True
+        config["profiles"]["another"] = copy.deepcopy(config["profiles"]["example-dev"])
+        settings = settings_from_dict(config)
+        config["profiles"]["example-dev"]["enabled"] = False
+        config["profiles"].clear()
+        self.assertEqual(list(settings.profiles), ["example-dev", "another"])
+        self.assertEqual(list(settings.enabled_profiles), ["example-dev", "another"])
+
     def test_every_declared_config_field_is_required(self):
         """任意层级缺少必填字段都会指出完整路径"""
         paths = [

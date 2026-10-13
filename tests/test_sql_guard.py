@@ -4,7 +4,7 @@ import unittest
 
 from fastapi import HTTPException
 
-from app.sql_guard import clean_select_sql, clean_sql, count_sql, first_word, paged_sql
+from app.sql_guard import clean_select_sql, count_sql, paged_sql, validate_sql
 
 
 class SqlGuardTest(unittest.TestCase):
@@ -25,15 +25,29 @@ class SqlGuardTest(unittest.TestCase):
             "select @@session.sql_mode, @@session.transaction_read_only",
         ]:
             with self.subTest(sql=sql):
-                self.assertEqual(clean_sql(sql), sql.strip())
+                self.assertEqual(validate_sql(sql).sql, sql.strip())
 
     def test_ordinary_comments_and_delimiter(self):
         """普通注释可用且只移除语句末尾的分号"""
         sql = "/* header */ select 1; -- last comment"
-        self.assertEqual(first_word(sql), "select")
-        self.assertEqual(clean_sql(sql), "/* header */ select 1 -- last comment")
-        self.assertEqual(clean_sql("# comment\nselect 1;"), "# comment\nselect 1")
-        self.assertEqual(clean_sql("select 1--2"), "select 1--2")
+        validated = validate_sql(sql)
+        self.assertEqual(validated.statement, "select")
+        self.assertEqual(validated.sql, "/* header */ select 1 -- last comment")
+        self.assertEqual(validate_sql("# comment\nselect 1;").sql, "# comment\nselect 1")
+        self.assertEqual(validate_sql("select 1--2").sql, "select 1--2")
+
+    def test_statement_type_ignores_comments_and_quoted_content(self):
+        """语句分派只取未引用的首个关键字且保留后续文本"""
+        for sql, statement in [
+            ("/* SHOW */ SeLeCt 'with; show' AS `select`; -- keep", "select"),
+            ("# SELECT\nWITH q AS (SELECT 1) SELECT * FROM q;", "with"),
+            ("-- WITH\nShOw CREATE TABLE `select`; # keep", "show"),
+        ]:
+            with self.subTest(sql=sql):
+                self.assertEqual(validate_sql(sql).statement, statement)
+        for sql in ["`select` 1", "'select' 1", '"select" 1', ";"]:
+            with self.subTest(sql=sql), self.assertRaises(HTTPException):
+                validate_sql(sql)
 
     def test_rejects_executable_comments_and_multiple_statements(self):
         """多语句、可执行注释和不完整词法边界被拒绝"""
@@ -48,7 +62,7 @@ class SqlGuardTest(unittest.TestCase):
             "-- no query",
         ]:
             with self.subTest(sql=sql), self.assertRaises(HTTPException):
-                clean_sql(sql)
+                validate_sql(sql)
 
     def test_read_only_guards_include_show_expressions(self):
         """只读规则也覆盖 SHOW 表达式与带引用的函数调用"""
@@ -74,24 +88,24 @@ class SqlGuardTest(unittest.TestCase):
             "show tables where @x:=1",
         ]:
             with self.subTest(sql=sql), self.assertRaises(HTTPException):
-                clean_sql(sql)
+                validate_sql(sql)
 
     def test_sql_mode_controls_quote_boundaries(self):
         """词法边界遵循实际 SQL mode"""
         sql = r"select 'a\'; select 2 -- '"
-        self.assertEqual(clean_sql(sql), sql)
+        self.assertEqual(validate_sql(sql).sql, sql)
         with self.assertRaises(HTTPException):
-            clean_sql(sql, "NO_BACKSLASH_ESCAPES")
+            validate_sql(sql, "NO_BACKSLASH_ESCAPES")
         quoted_identifier = 'select "a\\"; select 2 -- "'
-        self.assertEqual(clean_sql(quoted_identifier), quoted_identifier)
+        self.assertEqual(validate_sql(quoted_identifier).sql, quoted_identifier)
         with self.assertRaises(HTTPException):
-            clean_sql(quoted_identifier, "ANSI_QUOTES")
+            validate_sql(quoted_identifier, "ANSI_QUOTES")
         with self.assertRaises(HTTPException):
-            clean_sql('select "sleep"(1)', "ANSI_QUOTES")
+            validate_sql('select "sleep"(1)', "ANSI_QUOTES")
 
     def test_paging_and_count_keep_inner_limit_and_trailing_comment(self):
         """外层查询保留内部 LIMIT 且末尾行注释不会吞掉包装语句"""
-        sql = clean_sql("select 1 limit 1 -- keep")
+        sql = validate_sql("select 1 limit 1 -- keep").sql
         self.assertEqual(
             paged_sql(sql, 5, 10), "SELECT *\nFROM (\nselect 1 limit 1 -- keep\n) AS _codex_query\nLIMIT 6 OFFSET 10"
         )

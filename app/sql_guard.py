@@ -23,7 +23,7 @@ FORBIDDEN_FUNCTIONS = {
 }
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Token:
     """表示一个参与只读检查的 SQL 词法单元
 
@@ -36,6 +36,19 @@ class Token:
     value: str
     start: int
     quoted: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ValidatedSql:
+    """表示一次完整只读校验得到的 SQL 与语句类型
+
+    Attributes:
+        sql: 移除首尾空白和可选末尾分号的 SQL，保留字面量及注释原文
+        statement: 首个未引用关键字的小写形式，只会是 select、with 或 show
+    """
+
+    sql: str
+    statement: str
 
 
 def tokens(sql: str, sql_mode: str = "") -> list[Token]:
@@ -107,15 +120,15 @@ def tokens(sql: str, sql_mode: str = "") -> list[Token]:
     return result
 
 
-def clean_sql(sql: str, sql_mode: str = "") -> str:
-    """检查单条只读 SQL 并移除可选的末尾分号
+def validate_sql(sql: str, sql_mode: str = "") -> ValidatedSql:
+    """一次扫描完成只读校验并提取供查询分派复用的语句类型
 
     Args:
         sql: 调用方提交的 SQL 原文
         sql_mode: 实际会话的 SQL mode，省略时按普通词法规则处理
 
     Returns:
-        去除首尾空白和末尾语句分隔符的 SQL，不重写字段字面量
+        去除首尾空白和末尾语句分隔符的 SQL 及语句类型，不重写字段字面量
 
     Raises:
         HTTPException: SQL 为空、多语句、起始语句不允许或包含被禁止的操作
@@ -147,7 +160,7 @@ def clean_sql(sql: str, sql_mode: str = "") -> str:
                 raise_sql_error(f"Keyword {value.upper()} is not allowed in a read query.")
             if any(tuple(words[index : index + len(phrase)]) == phrase for phrase in LOCKING_PHRASES):
                 raise_sql_error("Locking reads are not allowed.")
-    return cleaned.strip()
+    return ValidatedSql(cleaned.strip(), words[0])
 
 
 def clean_select_sql(sql: str, sql_mode: str = "") -> str:
@@ -163,10 +176,10 @@ def clean_select_sql(sql: str, sql_mode: str = "") -> str:
     Raises:
         HTTPException: 只读检查失败，或提交了 SHOW 等不适用语句
     """
-    cleaned = clean_sql(sql, sql_mode)
-    if first_word(cleaned, sql_mode) not in {"select", "with"}:
+    validated = validate_sql(sql, sql_mode)
+    if validated.statement not in {"select", "with"}:
         raise_sql_error("Only SELECT or WITH SQL is allowed for this operation.")
-    return cleaned
+    return validated.sql
 
 
 def raise_sql_error(detail: str) -> NoReturn:
@@ -179,23 +192,6 @@ def raise_sql_error(detail: str) -> NoReturn:
         HTTPException: 始终抛出状态为 400 的异常
     """
     raise HTTPException(status_code=400, detail=detail)
-
-
-def first_word(sql: str, sql_mode: str = "") -> str:
-    """读取跳过普通注释后的首个 SQL 词法单元
-
-    Args:
-        sql: 待识别的 SQL
-        sql_mode: 实际会话的 SQL mode，省略时按普通词法规则处理
-
-    Returns:
-        首个未引用词法单元的归一化内容，无有效单元时为空字符串
-
-    Raises:
-        HTTPException: 词法边界不完整或出现禁止的注释
-    """
-    parsed = tokens(sql, sql_mode)
-    return parsed[0].value if parsed and not parsed[0].quoted else ""
 
 
 def paged_sql(sql: str, limit: int, offset: int) -> str:

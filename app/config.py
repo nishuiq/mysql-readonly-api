@@ -129,22 +129,22 @@ class Settings:
         app: 应用名称与日志设置
         server: REST 监听设置
         query: 查询行数与执行时间限制
-        profiles: 所有环境配置，包含禁用环境，可显式为空映射
+        profiles: 校验后不可增删或替换的环境配置，包含禁用环境，可显式为空映射
     """
 
     app: AppConfig
     server: ServerConfig
     query: QueryConfig
-    profiles: dict[str, ProfileConfig]
+    profiles: frozendict[str, ProfileConfig]
 
     @property
-    def enabled_profiles(self) -> dict[str, ProfileConfig]:
+    def enabled_profiles(self) -> frozendict[str, ProfileConfig]:
         """筛选允许通过 API 访问的环境
 
         Returns:
-            保持配置顺序的启用环境映射，没有启用环境时为空
+            保持配置顺序的不可变启用环境映射，没有启用环境时为空
         """
-        return {name: profile for name, profile in self.profiles.items() if profile.enabled}
+        return frozendict((name, profile) for name, profile in self.profiles.items() if profile.enabled)
 
 
 PROFILE_NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]*")
@@ -165,7 +165,7 @@ def load_settings(path: str | Path = "config.yaml") -> Settings:
     config_path = Path(path)
     try:
         source = config_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
+    except OSError, UnicodeError:
         raise RuntimeError(f"Cannot read UTF-8 config file: {config_path}") from None
     try:
         config = yaml.safe_load(source)
@@ -308,14 +308,14 @@ def string_value(value: Any, path: str, *, empty: bool = False) -> str:
     return value
 
 
-def profile_configs(config: Any) -> dict[str, ProfileConfig]:
+def profile_configs(config: Any) -> frozendict[str, ProfileConfig]:
     """解析以环境名称为键的完整 profile 配置
 
     Args:
         config: profiles 节点，允许显式为空映射
 
     Returns:
-        保持配置顺序的全部环境，包括禁用环境
+        与输入字典隔离且保持配置顺序的不可变环境映射，包括禁用环境
 
     Raises:
         RuntimeError: 环境名称不合法，或任意环境的配置缺失、未知或无效
@@ -333,7 +333,7 @@ def profile_configs(config: Any) -> dict[str, ProfileConfig]:
             enabled=bool_value(profile["enabled"], f"{path}.enabled"),
             mysql=mysql_config(profile["mysql"], f"{path}.mysql"),
         )
-    return result
+    return frozendict(result)
 
 
 def mysql_config(config: Any, path: str) -> MysqlConfig:
