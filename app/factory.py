@@ -14,7 +14,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     """创建具备显式配置和独立连接池生命周期的应用
 
     Args:
-        settings: 已经校验的配置，为 None 时从 config.yaml 加载完整配置文件
+        settings: 已经校验的配置，为 None 时从 config.toml 加载完整配置文件
 
     Returns:
         注册路由与异常处理器的应用，连接池在生命周期启动时创建

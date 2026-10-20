@@ -1,10 +1,9 @@
 """提供来自完整示例文件的测试配置，避免读取本地业务配置"""
 
+import tomllib
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
-
-import yaml
 
 from app.config import MysqlConfig, settings_from_dict
 
@@ -15,8 +14,8 @@ def example_config() -> dict[str, Any]:
     Returns:
         可由每个用例独立修改的配置映射，不包含本地业务连接信息
     """
-    path = Path(__file__).resolve().parents[1] / "config.example.yaml"
-    return yaml.safe_load(path.read_text(encoding="utf-8"))
+    path = Path(__file__).resolve().parents[1] / "config.example.toml"
+    return tomllib.loads(path.read_text(encoding="utf-8"))
 
 
 def example_mysql() -> MysqlConfig:

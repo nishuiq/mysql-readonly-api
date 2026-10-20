@@ -10,7 +10,7 @@ wheels/
 .venv
 
 # Local config
-config.yaml
+config.toml
 
 # Local test runtimes and temporary files
 /temp/

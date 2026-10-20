@@ -5,19 +5,18 @@ description = "A tiny readonly MySQL REST API."
 readme = { file = "README.adoc", content-type = "text/plain" }
 requires-python = ">=3.15"
 dependencies = [
-    "fastapi>=0.115.0",
-    "pymysql[rsa]>=1.1.1",
-    "pyyaml>=6.0.2",
-    "sqlmodel>=0.0.22",
-    "uvicorn[standard]>=0.32.0",
+    "fastapi>=0.150.0",
+    "pymysql[rsa]>=1.2.3",
+    "sqlmodel>=0.0.48",
+    "uvicorn[standard]>=0.54.0",
 ]
 
 [dependency-groups]
 dev = [
-    "httpx>=0.28.1",
-    "ruff>=0.16.6",
+    "httpx2>=2.15.1",
+    "ruff>=0.17.1",
 ]
 
 [tool.uv.extra-build-variables]
-# 缺少匹配的 wheel 时构建纯 Python 版本，配置读取不依赖 LibYAML 扩展
+# 缺少匹配 wheel 时使用纯 Python 构建，避免要求 C 编译器
 pyyaml = { PYYAML_FORCE_LIBYAML = "0" }

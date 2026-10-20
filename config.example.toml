@@ -1,0 +1,38 @@
+# TOML 1.1；所有字段必须显式填写；布尔值使用 true/false，数值使用整数
+
+[app]
+name = "mysql-readonly-api"                   # 应用名称，显示于 API 文档
+sql_log = false                               # 开启后记录 SQL 和参数，不记录结果集
+
+[server]
+host = "127.0.0.1"                            # REST 服务监听地址
+port = 8765                                   # REST 端口，范围 1–65535
+reload = false                                # 开发环境自动重载
+
+[query]
+limit = 500                                   # 默认返回行数及单次硬上限，请求只能缩小
+timeout_ms = 15000                            # MySQL max_execution_time，毫秒，主要限制只读 SELECT
+
+[profiles.example-dev]                        # 名称仅含小写字母、数字、-、_，首字符为字母或数字
+enabled = false                               # 是否启用；禁用环境也须完整配置
+description = "Example development database"  # 环境用途，供调用方选择
+mysql = {                                     # 当前环境的数据库连接配置
+    host = "localhost",                       # MySQL 主机，启用 TLS 时参与证书主机名校验
+    port = 3306,                              # MySQL 端口，范围 1–65535；SSH 转发时填写本地转发端口
+    username = "readonly",                    # 数据库账号，按需授予只读权限
+    password = "replace-me",                  # 数据库密码，允许显式填写空字符串
+    use_unicode = true,                       # 将字符字段解码为字符串，关闭时按二进制展示
+    character_encoding = "utf8mb4",           # 连接字符集，utf8mb4 支持完整 Unicode
+    use_ssl = true,                           # 启用 TLS，并校验证书和主机名
+    ssl_ca = "",                              # 空字符串使用系统信任库；CA 文件路径仅在启用 TLS 时有效
+    server_timezone = "+08:00",               # 会话时区，空字符串表示保留服务端设置
+    connect_timeout = 10,                     # 建立连接的超时，单位为秒
+    io_timeout = 30,                          # 网络读写超时，单位为秒，不是请求总时限
+    pool = {                                  # 当前环境独占的连接池配置
+        size = 5,                             # 常驻连接数量上限，必须为正整数
+        max_overflow = 10,                    # 允许临时增加的连接数，可为零
+        timeout = 30,                         # 等待可用连接的超时，单位为秒
+        recycle = 3600,                       # 连接达到此秒数后，在再次取用时回收
+        pre_ping = true,                      # 取用连接时检查存活状态
+    },
+}

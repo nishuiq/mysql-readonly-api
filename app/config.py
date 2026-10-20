@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import re
+import tomllib
 from collections.abc import Collection
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
-
-import yaml
 
 
 @dataclass(frozen=True)
@@ -70,7 +69,7 @@ class MysqlConfig:
         use_unicode: 是否将字符字段解码为字符串，关闭后按二进制展示驱动返回的 bytes
         character_encoding: 连接字符集
         use_ssl: 是否要求 TLS 加密并校验证书
-        ssl_ca: CA 文件路径，显式为 None 时使用系统信任库
+        ssl_ca: CA 文件路径，配置中的空字符串转换为 None 后使用系统信任库
         server_timezone: MySQL 会话时区，空字符串表示保留服务端设置
         connect_timeout: 建立连接的超时时间，单位为秒
         io_timeout: socket 接收结果与发送请求的超时时间，单位为秒
@@ -150,17 +149,17 @@ class Settings:
 PROFILE_NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]*")
 
 
-def load_settings(path: str | Path = "config.yaml") -> Settings:
-    """从指定 YAML 文件读取完整配置
+def load_settings(path: str | Path = "config.toml") -> Settings:
+    """从指定 TOML 文件读取完整配置
 
     Args:
-        path: 配置文件路径，省略时使用工作目录下的 config.yaml
+        path: 配置文件路径，省略时使用工作目录下的 config.toml
 
     Returns:
         已通过字段、类型和范围校验的配置，不为缺项补值
 
     Raises:
-        RuntimeError: 文件无法读取、YAML 无效或配置不符合当前字段约束
+        RuntimeError: 文件无法读取、TOML 无效或配置不符合当前字段约束
     """
     config_path = Path(path)
     try:
@@ -168,10 +167,10 @@ def load_settings(path: str | Path = "config.yaml") -> Settings:
     except OSError, UnicodeError:
         raise RuntimeError(f"Cannot read UTF-8 config file: {config_path}") from None
     try:
-        config = yaml.safe_load(source)
-    except yaml.YAMLError:
-        # YAML 解析异常可能包含密码所在的原始行
-        raise RuntimeError(f"Invalid YAML configuration: {config_path}") from None
+        config = tomllib.loads(source)
+    except tomllib.TOMLDecodeError:
+        # 解析异常保留原始配置，不向调用方回显可能包含凭据的内容
+        raise RuntimeError(f"Invalid TOML configuration: {config_path}") from None
     return settings_from_dict(config)
 
 
@@ -191,7 +190,7 @@ def object_value(value: Any, path: str, expected: Collection[str] | None = None)
     """校验配置对象及其完整字段集合
 
     Args:
-        value: YAML 中读取的配置节点
+        value: 配置文件中读取的节点
         path: 节点的完整路径，根节点使用空字符串
         expected: 必须且仅允许出现的键，为 None 时接受动态名称映射
 
@@ -220,7 +219,7 @@ def settings_from_dict(config: Any) -> Settings:
     """将完整配置映射转换为应用配置对象
 
     Args:
-        config: YAML 解析结果，必须包含全部根节点和各节点声明的字段
+        config: TOML 解析结果，必须包含全部根节点和各节点声明的字段
 
     Returns:
         不包含隐式缺省值的配置对象
@@ -344,7 +343,7 @@ def mysql_config(config: Any, path: str) -> MysqlConfig:
         path: 当前节点的完整路径，用于定位字段错误
 
     Returns:
-        保留显式输入值的 MySQL 配置，ssl_ca 必须填写路径或 None
+        保留显式输入语义的 MySQL 配置，ssl_ca 的空字符串转换为 None
 
     Raises:
         RuntimeError: 配置字段缺失、未知、值无效，或关闭 TLS 时仍指定 CA 文件
@@ -353,11 +352,10 @@ def mysql_config(config: Any, path: str) -> MysqlConfig:
     pool_path = f"{path}.pool"
     pool = object_value(mysql["pool"], pool_path, field_names(MysqlPoolConfig))
     ssl_ca = mysql["ssl_ca"]
-    if ssl_ca is not None:
-        ssl_ca = string_value(ssl_ca, f"{path}.ssl_ca")
+    ssl_ca = None if ssl_ca == "" else string_value(ssl_ca, f"{path}.ssl_ca")
     use_ssl = bool_value(mysql["use_ssl"], f"{path}.use_ssl")
     if ssl_ca is not None and not use_ssl:
-        raise RuntimeError(f"Config {path}.ssl_ca requires {path}.use_ssl: true.")
+        raise RuntimeError(f"Config {path}.ssl_ca requires {path}.use_ssl = true.")
     return MysqlConfig(
         host=string_value(mysql["host"], f"{path}.host"),
         port=int_value(mysql["port"], f"{path}.port", maximum=65535),
