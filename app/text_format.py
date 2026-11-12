@@ -1,4 +1,4 @@
-"""将数据库结果表示为保留字符串原值的文本或紧凑 JSON"""
+"""将数据库结果表示为保留字符串原值的 TSV 或紧凑 JSON"""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from starlette.responses import JSONResponse
 
 from app.executor import QueryResult
 
-OutputFormat = Literal["text", "json"]
+OutputFormat = Literal["tsv", "json"]
 
 
 def time_interval(value: timedelta) -> str:
@@ -69,8 +69,8 @@ def format_value(value: Any) -> str:
     return str(value)
 
 
-def format_text_rows(columns: Sequence[str], rows: Sequence[Sequence[Any]], truncated: bool = False) -> str:
-    """按列和行顺序拼接供阅读的结果文本
+def format_tsv_rows(columns: Sequence[str], rows: Sequence[Sequence[Any]], truncated: bool = False) -> str:
+    """按列和行顺序拼接供阅读的 TSV 结果
 
     Args:
         columns: 列名序列，空序列表示没有结果列
@@ -86,15 +86,15 @@ def format_text_rows(columns: Sequence[str], rows: Sequence[Sequence[Any]], trun
     return "\n".join(lines)
 
 
-def result_response(result: QueryResult, output_format: OutputFormat = "text") -> Response:
+def result_response(result: QueryResult, output_format: OutputFormat = "tsv") -> Response:
     """按所选格式生成成功的结果响应
 
     Args:
         result: 包含列、行和截断状态的统一结果
-        output_format: text 或 json，省略时使用 text
+        output_format: tsv 或 json，省略时使用 tsv
 
     Returns:
-        文本或紧凑 JSON 响应，空结果仍返回 200
+        TSV 或紧凑 JSON 响应，空结果仍返回 200
     """
     if output_format == "json":
         return JSONResponse(
@@ -104,7 +104,10 @@ def result_response(result: QueryResult, output_format: OutputFormat = "text") -
                 "truncated": result.truncated,
             }
         )
-    return text_response(format_text_rows(result.columns, result.rows, result.truncated))
+    return Response(
+        content=format_tsv_rows(result.columns, result.rows, result.truncated),
+        media_type="text/tab-separated-values; charset=utf-8",
+    )
 
 
 def text_response(content: str, status_code: int = 200) -> Response:

@@ -8,6 +8,8 @@ from typing import Any
 
 from sqlmodel import Session, text
 
+OFFSET_FETCH_SIZE = 1000
+
 
 @dataclass(frozen=True)
 class QueryResult:
@@ -24,12 +26,13 @@ class QueryResult:
     truncated: bool = False
 
 
-def read_result(result: Any, limit: int | None = None) -> QueryResult:
+def read_result(result: Any, limit: int | None = None, offset: int = 0) -> QueryResult:
     """读取列名和结果行并根据额外一行判断截断
 
     Args:
         result: 尚未关闭的 SQLAlchemy 结果游标
         limit: 最多保留的行数，为 None 时读取全部结果
+        offset: 返回前跳过的结果行数
 
     Returns:
         保留字段原值的结果集，不返回额外探测行，没有结果列时为空
@@ -37,18 +40,24 @@ def read_result(result: Any, limit: int | None = None) -> QueryResult:
     if not result.returns_rows:
         return QueryResult([], [])
     columns = [str(column) for column in result.keys()]
+    while offset:
+        skipped = result.fetchmany(min(offset, OFFSET_FETCH_SIZE))
+        if not skipped:
+            return QueryResult(columns, [])
+        offset -= len(skipped)
     rows = result.fetchall() if limit is None else result.fetchmany(limit + 1)
     truncated = limit is not None and len(rows) > limit
     return QueryResult(columns, [tuple(row) for row in rows[:limit]], truncated)
 
 
-def run_query(session: Session, sql: str, limit: int | None = None) -> QueryResult:
-    """将用户 SQL 直接交给驱动执行
+def run_query(session: Session, sql: str, limit: int, offset: int = 0) -> QueryResult:
+    """流式执行已校验的用户查询并限制结果
 
     Args:
         session: 当前请求的只读会话
-        sql: 已通过校验的完整 SQL，不作为绑定参数模板解释
-        limit: 最多保留的行数，为 None 时读取全部结果
+        sql: 已通过校验的 SQL，不作为绑定参数模板解释
+        limit: 最多保留的正整数行数
+        offset: 返回前跳过的非负行数
 
     Returns:
         统一的查询结果，游标会在读取后关闭
@@ -56,8 +65,10 @@ def run_query(session: Session, sql: str, limit: int | None = None) -> QueryResu
     Raises:
         SQLAlchemyError: 数据库拒绝 SQL 或执行过程中连接失败
     """
-    with session.connection().exec_driver_sql(sql, execution_options={"no_parameters": True}) as result:
-        return read_result(result, limit)
+    with session.connection().exec_driver_sql(
+        sql, execution_options={"no_parameters": True, "stream_results": True}
+    ) as result:
+        return read_result(result, limit, offset)
 
 
 def run_sql(

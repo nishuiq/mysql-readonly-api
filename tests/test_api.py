@@ -42,11 +42,15 @@ class ApiTest(unittest.TestCase):
         )
 
     def test_query_formats_and_configured_limit(self):
-        """请求省略行数时使用配置上限且两种格式保留截断状态"""
+        """默认和显式 TSV 保留截断状态且 JSON 保持原有结构"""
         with patch("app.api.query_result", return_value=QueryResult(["id"], [(1,), (2,)], True)) as query:
             response = self.post()
             self.assertEqual(response.text, "[truncated]\nid\n1\n2")
+            self.assertEqual(response.headers["content-type"], "text/tab-separated-values; charset=utf-8")
             query.assert_called_with(self.session, "select 1", 2, 0)
+            explicit = self.post("/query?format=tsv")
+            self.assertEqual(explicit.text, response.text)
+            self.assertEqual(explicit.headers["content-type"], response.headers["content-type"])
             response = self.post("/query?format=json")
             self.assertEqual(response.json(), {"columns": ["id"], "rows": [[1], [2]], "truncated": True})
 
@@ -56,6 +60,7 @@ class ApiTest(unittest.TestCase):
             ("limit=0", "limit"),
             ("limit=3", "at most 2"),
             ("offset=-1", "offset"),
+            ("format=text", "format"),
             ("format=xml", "format"),
         ]:
             with self.subTest(query=query):
@@ -92,18 +97,34 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertIn("Unknown or disabled profile", response.text)
 
-    def test_metadata_and_count_support_json(self):
-        """元数据、计数和计划接口均支持 JSON 结果"""
-        for method, path, function in [
-            ("get", "/schemas", "list_schemas"),
-            ("get", "/tables?schema=app", "list_tables"),
-            ("post", "/count", "count_result"),
-            ("post", "/explain", "explain_result"),
+    def test_metadata_supports_tsv_and_json(self):
+        """固定元数据接口默认返回 TSV 并支持显式格式"""
+        profiles = self.client.get("/profiles")
+        self.assertEqual(profiles.headers["content-type"], "text/tab-separated-values; charset=utf-8")
+        self.assertEqual(self.client.get("/profiles?format=tsv").text, profiles.text)
+        for path, function in [
+            ("/schemas", "list_schemas"),
+            ("/tables?schema=app", "list_tables"),
         ]:
             with self.subTest(path=path), patch("app.api." + function, return_value=QueryResult(["v"], [(1,)])):
-                suffix = "&format=json" if "?" in path else "?format=json"
-                response = (
-                    self.post(path + suffix) if method == "post" else self.client.get("/profiles/test" + path + suffix)
-                )
+                separator = "&" if "?" in path else "?"
+                default = self.client.get("/profiles/test" + path)
+                explicit = self.client.get("/profiles/test" + path + separator + "format=tsv")
+                self.assertEqual(default.text, "v\n1")
+                self.assertEqual(default.headers["content-type"], "text/tab-separated-values; charset=utf-8")
+                self.assertEqual(explicit.text, default.text)
+                response = self.client.get("/profiles/test" + path + separator + "format=json")
                 self.assertEqual(response.status_code, 200)
                 self.assertEqual(response.json()["rows"], [[1]])
+
+    def test_ddl_remains_plain_text(self):
+        """DDL 摘要继续返回纯文本而不是 TSV"""
+        with patch("app.api.table_ddl_text", return_value="create table example"):
+            response = self.client.get("/profiles/test/ddl?schema=app&table=example")
+        self.assertEqual(response.text, "create table example")
+        self.assertEqual(response.headers["content-type"], "text/plain; charset=utf-8")
+
+    def test_count_and_explain_use_the_query_endpoint(self):
+        """独立计数和执行计划入口不再提供"""
+        self.assertEqual(self.post("/count").status_code, 404)
+        self.assertEqual(self.post("/explain").status_code, 404)

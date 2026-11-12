@@ -62,38 +62,36 @@ TLS 开启时要求连接实际加密，并校验证书和主机名。`ssl_ca = 
 |`GET /profiles/<profile>/schemas` |`limit` 可选 |账号可见的非系统 schema
 |`GET /profiles/<profile>/tables` |`schema` 必填；`keyword`、`limit` 可选 |表或视图的名称、类型、注释和估计行数
 |`GET /profiles/<profile>/ddl` |`schema`、`table` 必填 |紧凑结构摘要
-|`POST /profiles/<profile>/query` |SELECT/WITH/SHOW；`limit`、`offset` 可选 |查询结果
-|`POST /profiles/<profile>/count` |SELECT/WITH |`count` 列的一行计数
-|`POST /profiles/<profile>/explain` |SELECT/WITH；`limit` 可选 |执行计划
+|`POST /profiles/<profile>/query` |SELECT/WITH/SHOW/EXPLAIN；`limit`、`offset` 可选 |查询、计数或执行计划结果
 |===
 
-POST 请求体直接使用 UTF-8 `text/plain` SQL，查询参数需 URL 编码。`/profiles/<profile>/ddl` 固定返回文本，其余接口支持 `format=text`（默认）和 `format=json`。
+POST 请求体直接使用 UTF-8 `text/plain` SQL，查询参数需 URL 编码。`/profiles/<profile>/ddl` 固定返回纯文本，其余接口支持 `format=tsv`（默认）和 `format=json`。
 
 `keyword` 对表名和注释做包含匹配，保留 `%`、`_` 等 LIKE 通配符。`table` 支持重复参数或逗号分隔；含逗号的名称需用反引号包裹，名称内的反引号写成两个反引号。
 
 === 行数与偏移
 
-`limit` 必须为正整数，省略时使用配置的 `query.limit`，该值也是单次硬上限。例如配置为 500，`limit=20` 返回至多 20 行，`limit=501` 被拒绝。行数限制不限制单个字段大小，需要控制响应体积时应选择所需列或在 SQL 中截取字段。
+`query.limit` 必须显式配置为 1–5000，示例值为 5000。请求的 `limit` 必须为正整数，省略时使用 `query.limit`，请求只能缩小该值。例如配置为 5000 时，`limit=20` 返回至多 20 行，`limit=5001` 被拒绝。行数限制不限制单个字段大小，需要控制响应体积时应选择所需列或在 SQL 中截取字段。
 
-`offset` 为非负整数，默认 0；SHOW 只接受 0。分页与截断语义见下文。
+`offset` 为非负整数，默认 0，表示从原 SQL 结果中跳过的行数，适用于 SELECT/WITH、SHOW 和 EXPLAIN。分页与截断语义见下文。
 
 === 调用示例
 
 [source,powershell]
 ----
 $base = "http://127.0.0.1:8765"
-Invoke-RestMethod "$base/profiles"
+Invoke-RestMethod "$base/profiles?format=tsv"
 $sql = "SELECT id, name FROM example_app.orders ORDER BY id LIMIT 20"
-Invoke-RestMethod -Method Post -Uri "$base/profiles/example-dev/query?limit=20" -ContentType "text/plain; charset=utf-8" -Body ([Text.Encoding]::UTF8.GetBytes($sql))
+Invoke-RestMethod -Method Post -Uri "$base/profiles/example-dev/query?format=tsv&limit=20" -ContentType "text/plain; charset=utf-8" -Body ([Text.Encoding]::UTF8.GetBytes($sql))
 ----
 
 == 结果格式
 
-常规浏览和查询优先省略 `format`，使用默认文本。需要程序化处理行列、提取源码原文或区分 SQL NULL 与字符串 `"NULL"` 时使用 `format=json`。
+常规浏览和查询优先使用 TSV；可省略 `format`，或显式指定 `format=tsv`。需要程序化处理行列、提取源码原文或区分 SQL NULL 与字符串 `"NULL"` 时使用 `format=json`。
 
-文本先显示列名，再以 tab 分隔字段、LF 分隔记录；字段内的 CR、LF、tab 和反斜杠保持原值。SQL NULL 与字符串 `"NULL"` 都显示为 `NULL`，因此不能仅按 tab 和换行可靠还原所有字段。
+TSV 响应的 Content-Type 为 `text/tab-separated-values; charset=utf-8`。结果先显示列名，再以 tab 分隔字段、LF 分隔记录；字段内的 CR、LF、tab 和反斜杠保持原值。SQL NULL 与字符串 `"NULL"` 都显示为 `NULL`，因此不能仅按 tab 和换行可靠还原所有字段。
 
-结果截断时，文本在表头前增加独立的 `[truncated]` 行，不插入空行：
+结果截断时，TSV 在表头前增加独立的 `[truncated]` 行，不插入空行：
 
 [listing]
 ----
@@ -110,11 +108,11 @@ id	body
 {"columns":["id","body"],"rows":[[1,"Alice"],[2,null]],"truncated":true}
 ----
 
-空结果返回 200，文本只有表头，JSON 为 `rows:[]`。JSON 按标准解码即可，不手工替换转义序列。
+空结果返回 200，TSV 只有表头，JSON 为 `rows:[]`。JSON 按标准解码即可，不手工替换转义序列。
 
 [cols="2,2,3",options="header"]
 |===
-|数据类型 |文本 |JSON
+|数据类型 |TSV |JSON
 
 |字符串、整数、浮点数 |驱动值的文本表示 |字符串、number
 |DECIMAL |保留精度和小数位 |字符串
@@ -128,36 +126,29 @@ JSON 保留字段边界，但不提供完整 MySQL 类型信息；MySQL JSON 字
 
 == SQL 与分页
 
-每次只接受一条只读语句，可带普通注释和末尾分号，允许 `@@` 系统变量读取。拒绝写操作、CALL/SET、用户变量、锁定读、文件/等待/锁函数、可执行注释和优化器 hint。
+查询规则和执行边界见 link:docs/sql-query-rules.adoc[SQL 查询条例]。
 
-词法检查遵循连接的 `sql_mode`，字符串中的关键字和分号不参与拦截，`INSERT()`、`REPLACE()` 字符串函数可用。具体语法由 MySQL 判断，5.7 不支持 WITH/CTE。
+每次只接受一条 SELECT、WITH、SHOW 或 EXPLAIN 语句，拒绝语句分号和 SQL 注释，包括可执行注释与优化器 hint；字符串或引用标识符中的相同字符不受影响。拒绝写操作、CALL/SET、用户变量、锁定读、文件/等待/锁函数和 EXPLAIN ANALYZE，允许 `@@` 系统变量读取。
 
-=== SELECT/WITH
+词法检查沿用连接的 `sql_mode`，SQLGlot 检查 SELECT/WITH 和 EXPLAIN 的语法树；SHOW 使用词法检查并由 MySQL 判断语法。`INSERT()`、`REPLACE()` 字符串函数可用。MySQL 5.7 不支持 WITH/CTE。
 
-API 使用外层 LIMIT/OFFSET 分页，多取一行判断截断：
+=== 查询与分页
 
-[source,sql]
-----
-SELECT *
-FROM (
-  -- 用户 SQL
-) AS _codex_query
-LIMIT <limit + 1> OFFSET <offset>
-----
+服务不为用户查询添加外层派生表、COUNT 或 EXPLAIN。SELECT/WITH 没有最外层 LIMIT 时，服务在原 SQL 末尾追加 `LIMIT <limit + 1> OFFSET <offset>`；已有最外层 LIMIT 时保留原文，行数超过 5000 则拒绝。SQL 自己的偏移量和子查询中的 LIMIT 不受这个检查限制。
 
-投影列名必须唯一，重名时需设置不同别名。原 SQL 的 LIMIT 仍然生效，截断标志不会越过它探测底层表；返回 `truncated:false` 不代表底层表已读完。
+例如 `LIMIT 6000, 20` 的行数是 20，允许执行；`LIMIT 20, 6000` 的行数是 6000，会被拒绝。SQL 自带的 LIMIT 先作用于原查询结果，API 再跳过 `offset` 行，最多返回 `limit` 行；结果中有额外一行时标记截断。
 
-要确定每页的数据，在 SQL 中使用唯一稳定的 ORDER BY 和 LIMIT，并用 OFFSET 或基于键的条件翻页；API offset 保持 0，API limit 至少等于 SQL 页大小。
+服务不为查询设置或恢复 `sql_select_limit`。SHOW 和 EXPLAIN 不追加 LIMIT，结果可能受数据库已有的会话设置影响。
 
-API 不额外保证返回行的顺序，展示顺序有严格要求时需对返回页按相同规则排序。MySQL 对内层排序的传播条件见 https://dev.mysql.com/doc/refman/8.0/en/derived-table-optimization.html[派生表优化文档]。
+已有最外层 LIMIT 的查询、SHOW 和 EXPLAIN 使用流式游标跳过 API `offset`；没有最外层 LIMIT 的 SELECT/WITH 由追加的 SQL OFFSET 处理。偏移越大，数据库可能需要处理更多行；流式跳过还会传输这些行，关闭游标时驱动也可能继续读取尚未消费的结果。需要高效翻页时，优先按唯一稳定的键在 SQL 中筛选。
 
-多次请求不共享快照，数据变化时 offset 分页可能重复或遗漏。
+重复的输出列名可按原 SQL 返回，JSON 的 `columns` 和 `rows` 分别保留列顺序。原 SQL 的 LIMIT 仍然生效，截断标志不会越过它探测底层表；返回 `truncated:false` 不代表底层表已读完。
 
-`count` 统计提交的 SQL 结果，包含内层 LIMIT 的影响，也要求结果列名唯一。仅在需要总数时调用，计数可能昂贵；API 分页不会预先 COUNT。
+需要稳定顺序时，在原 SQL 中使用唯一的 ORDER BY。多次请求不共享快照，数据变化时偏移分页可能重复或遗漏。
 
-=== SHOW 与元数据
+计数和执行计划通过同一个查询接口自行编写，例如 `SELECT COUNT(*) FROM example_app.orders` 和 `EXPLAIN SELECT * FROM example_app.orders`。仅在需要总数时计数，计数可能昂贵；API 分页不会预先 COUNT。
 
-SHOW 直接执行，返回行数受 `limit` 限制，但驱动仍缓冲原语句的完整结果。大量、可分页的元数据应查询 `information_schema`；schemas/tables 截断时也可缩小筛选范围或改用此方式。
+大量、可分页的元数据应查询 `information_schema`；schemas/tables 截断时也可缩小筛选范围或改用此方式。
 
 == DDL 与原生定义
 
@@ -179,10 +170,10 @@ SHOW 直接执行，返回行数受 `limit` 限制，但驱动仍缓冲原语句
 |===
 |HTTP |含义
 
-|400 |SQL 校验、语法、重复列名或 UTF-8 编码错误
+|400 |SQL 校验、语法或 UTF-8 编码错误
 |403 |权限不足或违反只读事务
 |404 |未知或禁用的 profile，或对象不存在、不可见
-|422 |参数错误，包括超出配置上限的 limit 和 SHOW 的非零 offset
+|422 |参数错误，包括超出配置上限的 limit 和负数 offset
 |503 |连接、认证、TLS 或连接池问题
 |504 |查询超时或被中断
 |500 |内部异常

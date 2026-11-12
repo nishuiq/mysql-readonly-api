@@ -9,6 +9,8 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
+MAX_QUERY_LIMIT = 5000
+
 
 @dataclass(frozen=True)
 class AppConfig:
@@ -95,7 +97,7 @@ class QueryConfig:
     """表示查询结果规模与执行时间限制
 
     Attributes:
-        limit: 请求未传 limit 时的返回行数，也是请求不能突破的硬上限
+        limit: 请求未传 limit 时的返回行数，也是请求不能突破的硬上限，最多为 5000
         timeout_ms: MySQL max_execution_time 的毫秒值，不覆盖所有 SHOW 或存储程序
     """
 
@@ -242,7 +244,7 @@ def settings_from_dict(config: Any) -> Settings:
             reload=bool_value(server["reload"], "server.reload"),
         ),
         query=QueryConfig(
-            limit=int_value(query["limit"], "query.limit"),
+            limit=int_value(query["limit"], "query.limit", maximum=MAX_QUERY_LIMIT),
             timeout_ms=int_value(query["timeout_ms"], "query.timeout_ms"),
         ),
         profiles=profile_configs(root["profiles"]),

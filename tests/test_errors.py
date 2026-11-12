@@ -70,7 +70,7 @@ class ErrorsTest(unittest.TestCase):
         ]:
             with self.subTest(number=number):
                 self.assertEqual(database_error(sql_error(number, "driver message"))[0], expected)
-        self.assertIn("alias", database_error(sql_error(1060, "duplicate"))[1])
+        self.assertIn("Duplicate column name", database_error(sql_error(1060, "Duplicate column name 'x'"))[1])
         self.assertEqual(database_error(TimeoutError())[0], 503)
 
     def test_framework_errors_are_text_and_keep_allow_header(self):

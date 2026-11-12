@@ -100,6 +100,7 @@ class ConfigTest(unittest.TestCase):
             (("server", "reload"), "false"),
             (("server", "port"), 65536),
             (("query", "limit"), 0),
+            (("query", "limit"), 5001),
             (("query", "limit"), None),
             (("query", "timeout_ms"), True),
             (("profiles", "example-dev", "enabled"), 0),
@@ -213,7 +214,7 @@ class ConfigTest(unittest.TestCase):
             (Path(directory) / "config.toml").write_text(source, encoding="utf-8", newline="\n")
             result = subprocess.run([sys.executable, "-c", code], cwd=directory, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stdout.strip(), "500")
+            self.assertEqual(result.stdout.strip(), "5000")
 
     def test_import_does_not_require_config(self):
         """模块导入不会读取配置文件或建立数据库连接"""

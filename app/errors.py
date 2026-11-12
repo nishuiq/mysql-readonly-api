@@ -73,8 +73,6 @@ def database_error(exc: SQLAlchemyError) -> tuple[int, str]:
         return 503, prefix + "Connection unavailable. Check server address, port, DNS and network."
     if number in {2006, 2013, 2055}:
         return 503, prefix + "Connection lost. Check server availability and network/socket timeouts."
-    if number == 1060:
-        return 400, prefix + "Duplicate result column name. Give each SELECT column a unique alias for paging/count."
     if number is None:
         return 500, "Database operation failed."
     status = 403 if number in {1044, 1142, 1143, 1227, 1370, 1792} else 404 if number in {1049, 1146, 1305} else 400

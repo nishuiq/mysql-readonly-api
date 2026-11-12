@@ -10,7 +10,7 @@ port = 8765                                   # REST 端口，范围 1–65535
 reload = false                                # 开发环境自动重载
 
 [query]
-limit = 500                                   # 默认返回行数及单次硬上限，请求只能缩小
+limit = 5000                                  # 默认返回行数及单次硬上限，请求只能缩小，最多 5000
 timeout_ms = 15000                            # MySQL max_execution_time，毫秒，主要限制只读 SELECT
 
 [profiles.example-dev]                        # 名称仅含小写字母、数字、-、_，首字符为字母或数字

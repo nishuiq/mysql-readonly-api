@@ -1,68 +1,28 @@
-"""协调只读 SQL 校验、结果分页、计数和执行计划查询"""
+"""协调只读 SQL 校验和结果分页"""
 
-from fastapi import HTTPException
 from sqlmodel import Session
 
 from app.executor import QueryResult, run_query
-from app.sql_guard import clean_select_sql, count_sql, explain_sql, paged_sql, validate_sql
+from app.sql_guard import validate_sql
 
 
 def query_result(session: Session, sql: str, limit: int, offset: int) -> QueryResult:
-    """执行 SELECT/WITH 或 SHOW 并限制返回行数
+    """执行单条只读 SQL 并限制返回结果
 
     Args:
         session: 附带实际 SQL mode 的只读会话
-        sql: 调用方提交的单条 SQL
+        sql: 调用方提交的单条 SQL，已有最外层 LIMIT 时保持原文
         limit: 已经校验的返回行数上限
-        offset: SELECT/WITH 的外层结果偏移量，SHOW 必须为零
+        offset: 原 SQL 结果的非负偏移量
 
     Returns:
-        统一结果集，SELECT 多取一行，SHOW 在驱动结果中判断截断
+        从偏移位置开始的有限结果，读取到额外行时标记截断
 
     Raises:
-        HTTPException: SQL 不符合只读规则或 SHOW 使用非零偏移量
+        HTTPException: SQL 不符合只读规则或最外层 LIMIT 超过上限
         SQLAlchemyError: 数据库执行失败
     """
     validated = validate_sql(sql, session.info["sql_mode"])
-    if validated.statement == "show":
-        if offset:
-            raise HTTPException(422, "SHOW does not support API offset; use information_schema SELECT for paging.")
-        return run_query(session, validated.sql, limit=limit)
-    return run_query(session, paged_sql(validated.sql, limit, offset), limit=limit)
-
-
-def count_result(session: Session, sql: str) -> QueryResult:
-    """统计提交的 SELECT/WITH 查询产生的结果行数
-
-    Args:
-        session: 附带实际 SQL mode 的只读会话
-        sql: 调用方 SQL，内层 LIMIT 会影响最终计数
-
-    Returns:
-        包含 count 列和单行计数的结果
-
-    Raises:
-        HTTPException: SQL 不符合 SELECT/WITH 只读规则
-        SQLAlchemyError: 计数查询执行失败
-    """
-    readonly_sql = clean_select_sql(sql, session.info["sql_mode"])
-    return run_query(session, count_sql(readonly_sql))
-
-
-def explain_result(session: Session, sql: str, limit: int) -> QueryResult:
-    """查询提交 SQL 的 MySQL 执行计划
-
-    Args:
-        session: 附带实际 SQL mode 的只读会话
-        sql: 调用方提交的 SELECT/WITH SQL
-        limit: 最多保留的计划结果行数
-
-    Returns:
-        原生 EXPLAIN 结果，超出返回上限时标记截断
-
-    Raises:
-        HTTPException: SQL 不符合 SELECT/WITH 只读规则
-        SQLAlchemyError: 执行计划查询失败
-    """
-    readonly_sql = clean_select_sql(sql, session.info["sql_mode"])
-    return run_query(session, explain_sql(readonly_sql), limit=limit)
+    if validated.statement in {"select", "with"} and validated.limit is None:
+        return run_query(session, f"{validated.sql}\nLIMIT {limit + 1} OFFSET {offset}", limit=limit, offset=0)
+    return run_query(session, validated.sql, limit=limit, offset=offset)
